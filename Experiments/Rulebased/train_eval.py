@@ -21,27 +21,30 @@ def eval_acc(net, testloader):
             100 * correct / total))
 
 BATCH_SIZE = 64
+# agent = 'InternalAgent'
+agent = 'FlawedAgent'
 trainloader = IterableStatesCollection(AGENT_CLASSES,
                                         num_players=3,
-                                        agent_id="InternalAgent",
+                                        agent_id=agent,
                                         batch_size=BATCH_SIZE)
 
 testloader = IterableStatesCollection(AGENT_CLASSES,
                                         num_players=3,
-                                        agent_id="InternalAgent",
+                                        agent_id=agent,
                                         batch_size=BATCH_SIZE,
                                       max_iter=100)
 
 criterion = torch.nn.CrossEntropyLoss()
 idx = 0
-for net in gen_model(959, 30, [4, 1], [128, 1024]):
+for net in gen_model(959, 50, [4, 1], [128, 1024]):
     # train model
-    optimizer = optim.Adam(net.parameters(), lr=0.001)
+    optimizer = optim.Adam(net.parameters(), lr=0.01)
     for epoch in range(50):  # loop over the dataset multiple times
         running_loss = 0.0
         for i, data in enumerate(trainloader, 0):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
+            # print(labels)
             # labels = torch.max(labels, 1)[1]
             # zero the parameter gradients
             optimizer.zero_grad()
@@ -58,7 +61,7 @@ for net in gen_model(959, 30, [4, 1], [128, 1024]):
                 print('[%d, %5d] loss: %.3f' %
                       (epoch + 1, i + 1, running_loss / 10))
                 running_loss = 0.0
-            if i % 499 == 498:
+            if i % 199 == 198:
                 eval_acc(net, testloader)
     path = f'./r2{idx}_net.pth'
     idx += 1

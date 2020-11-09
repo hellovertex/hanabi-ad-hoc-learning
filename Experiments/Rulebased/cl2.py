@@ -20,6 +20,7 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
+COLORS = ['R', 'Y', 'G', 'W', 'B']
 
 class StatesCollector:
     def __init__(self,
@@ -41,9 +42,27 @@ class StatesCollector:
                 self.agent_config = {'players': self.num_players}  # same for all ra.RulebasedAgent instances
 
             def to_one_hot(self, action_dict):
-                move = self.environment._build_move(action_dict)
-                int_action = self.environment.game.get_move_uid(move)  # 0 <= move_uid < max_moves()
-                one_hot_action = [0 for _ in range(self.environment.game.max_moves())]
+                def _deprecated():
+                    # this does not work as intended
+                    move = self.environment._build_move(action_dict)
+                    int_action = self.environment.game.get_move_uid(move)  # 0 <= move_uid < max_moves()
+                    one_hot_action = [0 for _ in range(self.environment.game.max_moves())]
+                    one_hot_action[int_action] = 1
+                    return one_hot_action
+                # max_moves: 5 x play, 5 x discard, reveal color x 20=5c*4pl, reveal rank x 20=5r*4pl
+                int_action = None
+
+                if action_dict['action_type'] == 'PLAY':
+                    int_action = action_dict['card_index']  # 0-4 slots
+                elif action_dict['action_type'] == 'DISCARD':
+                    int_action = 5 + action_dict['card_index']  # 5-9 slots
+                elif action_dict['action_type'] == 'REVEAL_COLOR':
+                    int_action = 10 + COLORS.index(action_dict['color']) * action_dict['target_offset']  # 10-29 slots
+                elif action_dict['action_type'] == 'REVEAL_RANK':
+                    int_action = 30 + action_dict['rank'] * action_dict['target_offset']  # 10-29 slots
+                # todo: dont use 50 slots but determine them dynamically depending on numplayers and cards
+                # one_hot_action = [0 for _ in range(self.environment.game.max_moves())]
+                one_hot_action = [0 for _ in range(50)]
                 one_hot_action[int_action] = 1
                 return one_hot_action
 
