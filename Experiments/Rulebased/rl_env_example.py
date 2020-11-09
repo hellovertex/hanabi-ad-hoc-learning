@@ -133,7 +133,7 @@ class Runner(object):
     return rewards
 
 if __name__ == "__main__":
-  flags = {'players': 2, 'num_episodes': 1, 'agent_class': 'SimpleAgent'}
+  flags = {'players': 2, 'num_episodes': 1, 'agent_class': 'OuterAgent'}
   options, arguments = getopt.getopt(sys.argv[1:], '',
                                      ['players=',
                                       'num_episodes=',
