@@ -20,14 +20,14 @@ def eval_acc(net, testloader):
     print('Accuracy of the network on 100 states: %d %%' % (
             100 * correct / total))
 
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 # agent = 'InternalAgent'
 agent = 'FlawedAgent'
 trainloader = IterableStatesCollection(AGENT_CLASSES,
                                         num_players=3,
                                         agent_id=agent,
                                         batch_size=BATCH_SIZE,
-                                        max_iter=1000)
+                                        max_iter=10000)
 
 testloader = IterableStatesCollection(AGENT_CLASSES,
                                         num_players=3,
@@ -47,7 +47,7 @@ for net in gen_model(959, 50, [1, 2], [64, 128, 256]):
         t_iter = time()
         for i, data in enumerate(trainloader, 0):
             # get the inputs; data is a list of [inputs, labels]
-            print(f'{i} iterations take {time() - t_iter} seconds')
+            # print(f'{i} iterations take {time() - t_iter} seconds')
             # t_s = time()
             inputs, labels = data
             # t_collect += time() - t_s
@@ -66,7 +66,7 @@ for net in gen_model(959, 50, [1, 2], [64, 128, 256]):
             # print statistics
             running_loss += loss.item()
             # t_train += time() - t
-            if i % 1000 == 999:  # print every 200 mini-batches
+            if i % 10 == 9:  # print every 200 mini-batches
                 print('[%d, %5d] loss: %.3f' %
                       (epoch + 1, i + 1, running_loss / 10))
                 running_loss = 0.0
@@ -74,7 +74,7 @@ for net in gen_model(959, 50, [1, 2], [64, 128, 256]):
                 # print(f'train time = {t_train}')
                 # t_collect = 0
                 # t_train = 0
-            if i % 4999 == 4998:
+            if i % 199 == 198:
                 eval_acc(net, testloader)
     path = f'./r2{idx}_net.pth'
     idx += 1

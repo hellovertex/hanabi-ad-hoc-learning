@@ -22,13 +22,102 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
 
 COLORS = ['R', 'Y', 'G', 'W', 'B']
 def get_states(num_states=1000000, agent_id = 'FlawedAgent'):
-    collector = StatesCollector(AGENT_CLASSES, 3, agent_id)
+    collector = StateActionCollector(AGENT_CLASSES, 3, agent_id)
     states, actions = collector.collect(max_states=num_states, agent_id=agent_id, games_per_group=10)
     states, actions = torch.from_numpy(states).type(torch.FloatTensor), torch.max(torch.from_numpy(actions), 1)[1]
     collector.save(to_path=f'./states_{agent_id}', states=states)
     collector.save(to_path=f'./actions_{agent_id}', states=actions)
 
-class StatesCollector:
+class Runner:
+    # consider using factory method to access outer from inner, see e.g.
+    # https://stackoverflow.com/questions/2024566/how-to-access-outer-class-from-an-inner-class
+    def __init__(self, num_players):
+        self.num_players = num_players
+        self.environment = rl_env.make('Hanabi-Full', self.num_players)
+        self.agent_config = {'players': self.num_players}  # same for all ra.RulebasedAgent instances
+        self.zeros = [0 for _ in range(50)]  # used by one hot encoding action function
+
+    def to_one_hot(self, action_dict):
+        # max_moves: 5 x play, 5 x discard, reveal color x 20=5c*4pl, reveal rank x 20=5r*4pl
+        int_action = None
+
+        if action_dict['action_type'] == 'PLAY':
+            int_action = action_dict['card_index']  # 0-4 slots
+        elif action_dict['action_type'] == 'DISCARD':
+            int_action = 5 + action_dict['card_index']  # 5-9 slots
+        elif action_dict['action_type'] == 'REVEAL_COLOR':
+            int_action = 10 + COLORS.index(action_dict['color']) * action_dict['target_offset']  # 10-29 slots
+        elif action_dict['action_type'] == 'REVEAL_RANK':
+            int_action = 30 + action_dict['rank'] * action_dict['target_offset']  # 10-29 slots
+        # todo: dont use 50 slots but determine them dynamically depending on numplayers and cards
+        # one_hot_action = [0 for _ in range(self.environment.game.max_moves())]
+        one_hot_action = [0 for _ in range(50)]
+        one_hot_action[int_action] = 1
+        return one_hot_action
+
+    def _is_target_agent(self, agent_id, agent_cls):
+        # if agent_id:
+        #     # determine if agent_id corresponds to target agent
+        #     keys = list(AGENT_CLASSES.keys())
+        #     vals = list(AGENT_CLASSES.values())
+        #     try:
+        #         return agent_id == keys[vals.index(agent_cls)]
+        #     except KeyError as e:
+        #         return False
+        if agent_id:
+            # print(str(agent_cls).__contains__(agent_id))
+            # todo little bit crude but shouldnt break as of now
+            return str(agent_cls).__contains__(agent_id)
+        return True
+
+    def run(self, agents, max_games=1, agent_id=None):
+        """
+        agents: Agent Classes used to sample players from (uniformly at random for each game)
+        max_games: number of games to collect at maximum
+        agent_id: if provided, only state-action pairs for corresponding agent are returned
+        """
+
+        i_game = 0
+        cum_states = []
+        cum_actions = []
+        turns_played = 0
+
+        while i_game < max_games:
+            # create game
+            observations = self.environment.reset()
+            done = False
+            players = agents  # players = [agent(self.agent_config) for agent in agents]
+
+            while not done:
+                # play game
+                for agent_index, agent in enumerate(players):
+                    observation = observations['player_observations'][agent_index]
+                    action = agent.act(observation)
+                    # determine current player action, other actions are None
+                    if observation['current_player'] == agent_index:
+                        assert action is not None
+                        current_player_action = action
+                        # maybe store vectorized state and one-hot encoded action
+                        if self._is_target_agent(agent_cls=agents[agent_index], agent_id=agent_id):
+                            # add binary encoding of player position, so that actions offsets
+                            # can be understood by the network, use 3 bits to encode (remove this later)
+                            binary_encoded_player_index = [int(i) for i in f'{agent_index:03b}']
+                            cum_states.append(observation['vectorized'] + binary_encoded_player_index)
+                            cum_actions.append(self.to_one_hot(current_player_action))
+                            turns_played += 1
+                    else:
+                        assert action is None
+                # end of turn
+                observations, reward, done, unused_info = self.environment.step(current_player_action)
+
+            # end of game - increment game or state counter
+            i_game += 1
+
+        # cumulated states and actions across all games
+        return cum_states, cum_actions, turns_played
+
+
+class StateActionCollector:
     def __init__(self,
                  agent_classes: Dict[str, ra.RulebasedAgent],
                  num_players: int,
@@ -36,114 +125,39 @@ class StatesCollector:
                  ):
         self.agent_classes = agent_classes
         self.num_players = num_players
-        self.states = []
+        # self.states = []
         self._agent_id = agent_id
+        self.runner = Runner(self.num_players)
+        self.initialized_agents = []
 
-        class _Runner:
-            # consider using factory method to access outer from inner, see e.g.
-            # https://stackoverflow.com/questions/2024566/how-to-access-outer-class-from-an-inner-class
-            def __init__(self, num_players):
-                self.num_players = num_players
-                self.environment = rl_env.make('Hanabi-Full', self.num_players)
-                self.agent_config = {'players': self.num_players}  # same for all ra.RulebasedAgent instances
-
-            def to_one_hot(self, action_dict):
-                def _deprecated():
-                    # this does not work as intended
-                    move = self.environment._build_move(action_dict)
-                    int_action = self.environment.game.get_move_uid(move)  # 0 <= move_uid < max_moves()
-                    one_hot_action = [0 for _ in range(self.environment.game.max_moves())]
-                    one_hot_action[int_action] = 1
-                    return one_hot_action
-                # max_moves: 5 x play, 5 x discard, reveal color x 20=5c*4pl, reveal rank x 20=5r*4pl
-                int_action = None
-
-                if action_dict['action_type'] == 'PLAY':
-                    int_action = action_dict['card_index']  # 0-4 slots
-                elif action_dict['action_type'] == 'DISCARD':
-                    int_action = 5 + action_dict['card_index']  # 5-9 slots
-                elif action_dict['action_type'] == 'REVEAL_COLOR':
-                    int_action = 10 + COLORS.index(action_dict['color']) * action_dict['target_offset']  # 10-29 slots
-                elif action_dict['action_type'] == 'REVEAL_RANK':
-                    int_action = 30 + action_dict['rank'] * action_dict['target_offset']  # 10-29 slots
-                # todo: dont use 50 slots but determine them dynamically depending on numplayers and cards
-                # one_hot_action = [0 for _ in range(self.environment.game.max_moves())]
-                one_hot_action = [0 for _ in range(50)]
-                one_hot_action[int_action] = 1
-                return one_hot_action
-
-            def _is_target_agent(self, agent_id, agent_cls):
-                # todo check if state collection for specific agent works, and if so
-                # todo train neural nets using the collected data
-
-                # if agent_id:
-                #     # determine if agent_id corresponds to target agent
-                #     keys = list(AGENT_CLASSES.keys())
-                #     vals = list(AGENT_CLASSES.values())
-                #     try:
-                #         return agent_id == keys[vals.index(agent_cls)]
-                #     except KeyError as e:
-                #         return False
-                if agent_id:
-                    # print(str(agent_cls).__contains__(agent_id))
-                    return str(agent_cls).__contains__(agent_id)
-                return True
-
-            def run(self, agents, max_games=1, agent_id=None):
-                """
-                agents: Agent Classes used to sample players from (uniformly at random for each game)
-                max_games: number of games to collect at maximum
-                agent_id: if provided, only state-action pairs for corresponding agent are returned
-                """
-
-                i_game = 0
-                cum_states = []
-                cum_actions = []
-                turns_played = 0
-
-                while i_game < max_games:
-                    # create game
-                    observations = self.environment.reset()
-                    done = False
-                    players = agents  # players = [agent(self.agent_config) for agent in agents]
-
-                    while not done:
-                        # play game
-                        for agent_index, agent in enumerate(players):
-                            observation = observations['player_observations'][agent_index]
-                            action = agent.act(observation)
-                            # determine current player action, other actions are None
-                            if observation['current_player'] == agent_index:
-                                assert action is not None
-                                current_player_action = action
-                                # maybe store vectorized state and one-hot encoded action
-                                if self._is_target_agent(agent_id=agent_id, agent_cls=agents[agent_index]):
-                                    # add binary encoding of player position, so that actions offsets
-                                    # can be understood by the network, use 3 bits to encode
-                                    binary_encoded_player_index = [int(i) for i in f'{agent_index:03b}']
-                                    cum_states.append(observation['vectorized'] + binary_encoded_player_index)
-                                    cum_actions.append(self.to_one_hot(current_player_action))
-                                    turns_played += 1
-                            else:
-                                assert action is None
-                        # end of turn
-                        observations, reward, done, unused_info = self.environment.step(current_player_action)
-
-                    # end of game - increment game or state counter
-                    i_game += 1
-
-                # cumulated states and actions across all games
-                return cum_states, cum_actions, turns_played
-
-        self.runner = _Runner(self.num_players)
-
-    def _initialize_agents(self):
+    def _initialize_all_agents(self, target_agent):
+        """ set self.initialized_agents,
+        so that run() calls wont re-initialize them every time
+        additionally, return index of target agent, so that it can be fed to run() calls
+        target agent is the one we want to collect (s,a) pairs for
+        """
         agents = []
-        for _, agent_cls in self.agent_classes.items():
+        target_index = None
+        for i, (agent_id, agent_cls) in enumerate(self.agent_classes.items()):
             agents.append(agent_cls({'players': self.num_players}))
-        return agents
+            if target_agent == agent_id:
+                target_index = i
+        self.initialized_agents = agents
+        return target_index
 
-    def collect(self, max_states=1000, sample_w_replacement=True, agent_id=None, games_per_group=1) -> Tuple[List[List], List[List]]:
+    def get_agents(self, k, target_agent_index=None):
+        """ If agent_id is specified, have agent with agent_id at least once in agents list
+        This is usually, because we want state,action pairs for this specific agent
+        """
+        if not target_agent_index:
+            agents = []
+        else:
+            agents = [self.initialized_agents[target_agent_index]]
+        indices = random.choices([i for i in range(len(self.initialized_agents))], k=k)
+        [agents.append(self.initialized_agents[i]) for i in indices]
+        return agents#, k
+
+    def collect(self, max_states=1000, agent_id=None, games_per_group=1) -> Tuple[List[List], List[List]]:
         """
         Play Hanabi games and store their states until num_states have been stored.
 
@@ -164,79 +178,43 @@ class StatesCollector:
         cum_actions = []
         # initialize all agents only once, and then pass them over to run function
 
-        initialized_agents = self._initialize_agents()
-
-        def _init_k():
-            if not agent_id:
-                k = self.num_players
-                agents = []
-            else:
-                k = self.num_players - 1
-                agents = [self.agent_classes[agent_id]({'players': self.num_players})]
-            return agents, k
-
-        agents, k = _init_k()
-
-        def _sample_agents_uniformly_w_replacement():
-            # init agent list
-            if not agent_id:
-                k = self.num_players
-                agents = []
-            else:
-                k = self.num_players - 1
-                agents = [self.agent_classes[agent_id]]
-
-            # fill agent list
-            if sample_w_replacement:
-                agent_classes = random.choices(list(self.agent_classes.items()), k=k)
-            else:
-                agent_classes = random.sample(self.agent_classes.items(), k=k)
-
-            for (unused_key, v) in agent_classes: agents.append(v)  # append class instance
-            # random.shuffle(agents)
-            return agents
+        target_agent_index = self._initialize_all_agents(agent_id)
+        k = self.num_players - bool(agent_id)  # save one spot for target agent
 
         while num_states < max_states:
 
-            # play one game with sampled agents
-            #agents = _sample_agents_uniformly_w_replacement()
-            indices = random.choices([i for i in range(len(initialized_agents))], k=k)
-            [agents.append(initialized_agents[i]) for i in indices]
+            # play one game with randomly sampled agents
+            agents = self.get_agents(k=k, target_agent_index=target_agent_index)
             states, actions, num_turns_played = self.runner.run(agents, max_games=games_per_group, agent_id=agent_id)
-            agents, _ = _init_k()
+
             # cumulated stats
             num_states += num_turns_played
             if not isinstance(cum_states, np.ndarray):
                 cum_states = np.array(states)
                 cum_actions = np.array(actions)
             else:
-                cum_states = np.concatenate((cum_states, states))
-                cum_actions = np.concatenate((cum_actions, actions))
+                try:
+                    cum_states = np.concatenate((cum_states, states))
+                    cum_actions = np.concatenate((cum_actions, actions))
+                except ValueError:
+                    print(states, actions, agents, num_states)
+                    exit(1)
+
+
 
         # return random subset of cum_states, cum_actions
         max_len = len(cum_states)
         indices = [random.randint(0,max_len-1) for _ in range(max_states)]
         return cum_states[indices], cum_actions[indices]
 
-    def save(self, to_path='./pickled_states', states=None):
-        """ states default to self.states """
-        # with open(file=to_path + f'{self.num_players}_players', mode='wb') as f:
-        with open(file=to_path, mode='wb') as f:
-            if states is None:
-                pickle.dump(self.states, f)
-            else:
-                pickle.dump(states, f)
-
-    def load(self, from_path='./pickled_states'):
-        if not os.path.exists(from_path):
-            with open(file=from_path + f'{self.num_players}_players', mode='rb') as f:
-                return pickle.load(f)
-        else:
-            with open(file=from_path, mode='rb') as f:
-                return pickle.load(f)
 
 
-# get_states(10)
-for k, _ in AGENT_CLASSES.items():
-    get_states(1000000, k)
-    print(f'got states for {k}')
+def _deprecated():
+    # this does not work as intended
+    # move = self.environment._build_move(action_dict)
+    # int_action = self.environment.game.get_move_uid(move)  # 0 <= move_uid < max_moves()
+    # one_hot_action = [0 for _ in range(self.environment.game.max_moves())]
+    # one_hot_action[int_action] = 1
+    # return one_hot_action
+    pass
+

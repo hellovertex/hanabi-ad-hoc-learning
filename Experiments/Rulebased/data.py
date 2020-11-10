@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from cl2 import StatesCollector, AGENT_CLASSES
+from cl2 import StateActionCollector, AGENT_CLASSES
 from typing import Dict, Optional
 import rulebased_agent as ra
 from time import time
@@ -24,7 +24,7 @@ class IterableStatesCollection(torch.utils.data.IterableDataset):
                  max_iter=1000  # number of batches returned by self.__iter__ until StopIteration
                  ):
         super(IterableStatesCollection).__init__()
-        self._data_collector = StatesCollector(agent_classes, num_players, agent_id)
+        self._data_collector = StateActionCollector(agent_classes, num_players, agent_id)
         # self._max_size_per_iter = max_size_per_iter
         self._agent_id = agent_id  # if None,
         # self.collect_data will return state,action pairs for all agents in AGENT_CLASSES
