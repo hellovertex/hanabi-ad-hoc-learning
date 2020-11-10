@@ -21,6 +21,12 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
 COLORS = ['R', 'Y', 'G', 'W', 'B']
+def get_states(num_states=1000000, agent_id = 'FlawedAgent'):
+    collector = StatesCollector(AGENT_CLASSES, 3, agent_id)
+    states, actions = collector.collect(max_states=num_states, agent_id=agent_id, games_per_group=10)
+    states, actions = torch.from_numpy(states).type(torch.FloatTensor), torch.max(torch.from_numpy(actions), 1)[1]
+    collector.save(to_path=f'./states_{agent_id}', states=states)
+    collector.save(to_path=f'./actions_{agent_id}', states=actions)
 
 class StatesCollector:
     def __init__(self,
@@ -66,7 +72,24 @@ class StatesCollector:
                 one_hot_action[int_action] = 1
                 return one_hot_action
 
-            def run(self, agents: List[ra.RulebasedAgent], max_games=1, agent_id=None):
+            def _is_target_agent(self, agent_id, agent_cls):
+                # todo check if state collection for specific agent works, and if so
+                # todo train neural nets using the collected data
+
+                # if agent_id:
+                #     # determine if agent_id corresponds to target agent
+                #     keys = list(AGENT_CLASSES.keys())
+                #     vals = list(AGENT_CLASSES.values())
+                #     try:
+                #         return agent_id == keys[vals.index(agent_cls)]
+                #     except KeyError as e:
+                #         return False
+                if agent_id:
+                    # print(str(agent_cls).__contains__(agent_id))
+                    return str(agent_cls).__contains__(agent_id)
+                return True
+
+            def run(self, agents, max_games=1, agent_id=None):
                 """
                 agents: Agent Classes used to sample players from (uniformly at random for each game)
                 max_games: number of games to collect at maximum
@@ -78,24 +101,11 @@ class StatesCollector:
                 cum_actions = []
                 turns_played = 0
 
-                def _is_target_agent(agent_cls):
-                    # todo check if state collection for specific agent works, and if so
-                    # todo train neural nets using the collected data
-                    if agent_id:
-                        # determine if agent_id corresponds to target agent
-                        keys = list(AGENT_CLASSES.keys())
-                        vals = list(AGENT_CLASSES.values())
-                        try:
-                            return agent_id == keys[vals.index(agent_cls)]
-                        except KeyError as e:
-                            return False
-                    return True
-
                 while i_game < max_games:
                     # create game
                     observations = self.environment.reset()
                     done = False
-                    players = [agent(self.agent_config) for agent in agents]
+                    players = agents  # players = [agent(self.agent_config) for agent in agents]
 
                     while not done:
                         # play game
@@ -107,7 +117,7 @@ class StatesCollector:
                                 assert action is not None
                                 current_player_action = action
                                 # maybe store vectorized state and one-hot encoded action
-                                if _is_target_agent(agent_cls=agents[agent_index]):
+                                if self._is_target_agent(agent_id=agent_id, agent_cls=agents[agent_index]):
                                     # add binary encoding of player position, so that actions offsets
                                     # can be understood by the network, use 3 bits to encode
                                     binary_encoded_player_index = [int(i) for i in f'{agent_index:03b}']
@@ -127,7 +137,13 @@ class StatesCollector:
 
         self.runner = _Runner(self.num_players)
 
-    def collect(self, max_states=1000, sample_w_replacement=True, agent_id=None) -> Tuple[List[List], List[List]]:
+    def _initialize_agents(self):
+        agents = []
+        for _, agent_cls in self.agent_classes.items():
+            agents.append(agent_cls({'players': self.num_players}))
+        return agents
+
+    def collect(self, max_states=1000, sample_w_replacement=True, agent_id=None, games_per_group=1) -> Tuple[List[List], List[List]]:
         """
         Play Hanabi games and store their states until num_states have been stored.
 
@@ -146,6 +162,20 @@ class StatesCollector:
         num_states = 0
         cum_states = []
         cum_actions = []
+        # initialize all agents only once, and then pass them over to run function
+
+        initialized_agents = self._initialize_agents()
+
+        def _init_k():
+            if not agent_id:
+                k = self.num_players
+                agents = []
+            else:
+                k = self.num_players - 1
+                agents = [self.agent_classes[agent_id]({'players': self.num_players})]
+            return agents, k
+
+        agents, k = _init_k()
 
         def _sample_agents_uniformly_w_replacement():
             # init agent list
@@ -169,9 +199,11 @@ class StatesCollector:
         while num_states < max_states:
 
             # play one game with sampled agents
-            agents = _sample_agents_uniformly_w_replacement()
-            states, actions, num_turns_played = self.runner.run(agents, max_games=1, agent_id=agent_id)
-
+            #agents = _sample_agents_uniformly_w_replacement()
+            indices = random.choices([i for i in range(len(initialized_agents))], k=k)
+            [agents.append(initialized_agents[i]) for i in indices]
+            states, actions, num_turns_played = self.runner.run(agents, max_games=games_per_group, agent_id=agent_id)
+            agents, _ = _init_k()
             # cumulated stats
             num_states += num_turns_played
             if not isinstance(cum_states, np.ndarray):
@@ -188,11 +220,11 @@ class StatesCollector:
 
     def save(self, to_path='./pickled_states', states=None):
         """ states default to self.states """
-        with open(file=to_path + f'{self.num_players}_players', mode='wb') as f:
+        # with open(file=to_path + f'{self.num_players}_players', mode='wb') as f:
+        with open(file=to_path, mode='wb') as f:
             if states is None:
                 pickle.dump(self.states, f)
             else:
-                assert type(states) == list
                 pickle.dump(states, f)
 
     def load(self, from_path='./pickled_states'):
@@ -204,52 +236,7 @@ class StatesCollector:
                 return pickle.load(f)
 
 
-# todo https://pytorch.org/docs/stable/data.html
-# todo implement dataloader for states, actions and train neural net
-
-class Generate:
-    def __init__(self):
-        self.last = 0
-
-    def __iter__(self):
-        self.last = 0
-        return self
-
-    def __next__(self):
-        rv = self.last
-        self.last += 1
-        if self.last >= 10:
-            raise StopIteration
-        return rv
-
-
-def generate():
-    for i in range(10):
-        yield i
-
-
-f = generate()
-g = Generate()
-print(type(f), type(g))
-#assert type(f) == type(g)
-assert next(f) == next(g)
-
-
-def load_data():
-    """ Log the lengths of each training dataset here """
-    LEN_MNIST = 10
-
-    def _generate_1():
-        for i in range(LEN_MNIST):
-            yield i
-
-    def _generate_2():
-        pass
-        # return iter(DataLoader)
-
-    return _generate_1, _generate_1()
-
-
-gen_train, gen_test = load_data()
-print(hasattr(gen_train, "__iter__"))
-print(hasattr(gen_train, "__next__"))
+# get_states(10)
+for k, _ in AGENT_CLASSES.items():
+    get_states(1000000, k)
+    print(f'got states for {k}')

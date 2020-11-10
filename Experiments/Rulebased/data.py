@@ -14,12 +14,6 @@ class IterableStatesCollection(torch.utils.data.IterableDataset):
     # to create a new iterator, and by calling iter() on the loader it returns an instance of
     # torch.utils.data._BaseDataLoaderIter which happens to implement __next__ and is thus a generator
 
-    def yield_batch(self):
-        for i in range(self._max_iter):
-            states, actions = self._data_collector.collect(self._batch_size, agent_id=self._agent_id)
-            yield torch.from_numpy(states).type(torch.FloatTensor), torch.max(torch.from_numpy(actions), 1)[1]
-
-
 
     def __init__(self,
                  agent_classes: Dict[str, ra.RulebasedAgent],
@@ -37,6 +31,21 @@ class IterableStatesCollection(torch.utils.data.IterableDataset):
         self._batch_size = batch_size
         # assert max_size_per_iter > batch_size, "maximum number of states to collect must be larger than batch_size"
         self._max_iter = max_iter
+
+    def yield_batch(self):
+        # todo sample datasets not batches to pass  to __iter__, its much faster
+        # todo because now we reset environment on each batch
+        for i in range(self._max_iter):
+            states, actions = self._data_collector.collect(self._batch_size, agent_id=self._agent_id)
+            yield torch.from_numpy(states).type(torch.FloatTensor), torch.max(torch.from_numpy(actions), 1)[1]
+
+    def get_states(self):
+        states, actions = self._data_collector.collect(self._max_iter, agent_id=self._agent_id, games_per_group=10)
+        states, actions = torch.from_numpy(states).type(torch.FloatTensor), torch.max(torch.from_numpy(actions), 1)[1]
+        n = int(self._max_iter / self._batch_size)
+        for s, a in zip([states[i:i+self._batch_size] for i in range(n)], [actions[i:i+self._batch_size] for i in range(n)]):
+            yield s, a
+
     def __iter__(self):
         # collect some states in a list (streaming data)
         # doing this using __len__ and __getitem__ would also work:
@@ -51,7 +60,9 @@ class IterableStatesCollection(torch.utils.data.IterableDataset):
         # states, actions = [(x0,y0), (x1,y1), ..., (xn, yn)]
         # return zip(*[self.collect_data(self._max_size_per_iter), self.collect_data(self._max_size_per_iter)])
         # return iter([self.collect_data(self._max_size_per_iter) for _ in range(self._batch_size)])
-        return iter(self.yield_batch())
+        # return iter(self.yield_batch())
+
+        return iter(self.get_states())
 
 #st = time()
 #tr = ts = IterableStatesCollection(AGENT_CLASSES, num_players=3, agent_id="InternalAgent", batch_size=64)
