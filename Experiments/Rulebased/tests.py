@@ -14,13 +14,13 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
 
 
 def test_save_load():
-    gen = cl2.StatesCollector(AGENT_CLASSES, 2)
+    gen = cl2.StateActionCollector(AGENT_CLASSES, 2)
     states=[1,2,3,4,5,6,7,8,9]
     gen.save(states=states)
     print(gen.load())
 
 def test_generate():
-    gen = cl2.StatesCollector(AGENT_CLASSES, 3)
+    gen = cl2.StateActionCollector(AGENT_CLASSES, 3)
     states, actions = gen.collect(max_states=10)
     print(len(states))
 test_generate()

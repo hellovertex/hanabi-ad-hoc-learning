@@ -8,6 +8,22 @@ import random
 # (*): type of layers, number of layers, size of layers
 # two to
 
+def get_model(observation_size,
+              num_actions,
+              num_hidden_layers,
+              layer_size
+):
+    # layer_size could be replaced with layer_sizes[i]
+    in_features = [observation_size] + [layer_size for _ in range(num_hidden_layers)]
+    out_features = [layer_size for _ in range(num_hidden_layers)] + [num_actions]
+
+    layers = []
+    for i in range(num_hidden_layers + 1):
+        layers.append(Linear(in_features[i], out_features[i]))
+        layers.append(ReLU)
+
+    return torch.nn.Sequential(*layers)
+
 def random_model(observation_size=1024, num_actions=20, max_hidden_layers=5):
     # create between 1 and 5 hidden layers, each of them having half the number of weights as the previous
     num_hidden_layers = random.randint(1, max_hidden_layers)

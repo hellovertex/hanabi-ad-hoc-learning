@@ -21,12 +21,6 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
 COLORS = ['R', 'Y', 'G', 'W', 'B']
-def get_states(num_states=1000000, agent_id = 'FlawedAgent'):
-    collector = StateActionCollector(AGENT_CLASSES, 3, agent_id)
-    states, actions = collector.collect(max_states=num_states, agent_id=agent_id, games_per_group=10)
-    states, actions = torch.from_numpy(states).type(torch.FloatTensor), torch.max(torch.from_numpy(actions), 1)[1]
-    collector.save(to_path=f'./states_{agent_id}', states=states)
-    collector.save(to_path=f'./actions_{agent_id}', states=actions)
 
 class Runner:
     # consider using factory method to access outer from inner, see e.g.
@@ -51,9 +45,10 @@ class Runner:
             int_action = 30 + action_dict['rank'] * action_dict['target_offset']  # 10-29 slots
         # todo: dont use 50 slots but determine them dynamically depending on numplayers and cards
         # one_hot_action = [0 for _ in range(self.environment.game.max_moves())]
-        one_hot_action = [0 for _ in range(50)]
-        one_hot_action[int_action] = 1
-        return one_hot_action
+        # one_hot_action = [0 for _ in range(50)]
+        # one_hot_action[int_action] = 1
+        # return one_hot_action
+        return int_action
 
     def _is_target_agent(self, agent_id, agent_cls):
         # if agent_id:
@@ -153,8 +148,9 @@ class StateActionCollector:
             agents = []
         else:
             agents = [self.initialized_agents[target_agent_index]]
-        indices = random.choices([i for i in range(len(self.initialized_agents))], k=k)
-        [agents.append(self.initialized_agents[i]) for i in indices]
+        # indices = random.choices([i for i in range(len(self.initialized_agents))], k=k)
+        # [agents.append(self.initialized_agents[i]) for i in indices]
+        agents += random.choices(self.initialized_agents, k=k)
         return agents#, k
 
     def collect(self, max_states=1000, agent_id=None, games_per_group=1) -> Tuple[List[List], List[List]]:
@@ -177,9 +173,8 @@ class StateActionCollector:
         cum_states = []
         cum_actions = []
         # initialize all agents only once, and then pass them over to run function
-
         target_agent_index = self._initialize_all_agents(agent_id)
-        k = self.num_players - bool(agent_id)  # save one spot for target agent
+        k = self.num_players - bool(agent_id)  # maybe save one spot for target agent
 
         while num_states < max_states:
 
@@ -200,21 +195,9 @@ class StateActionCollector:
                     print(states, actions, agents, num_states)
                     exit(1)
 
-
-
         # return random subset of cum_states, cum_actions
         max_len = len(cum_states)
         indices = [random.randint(0,max_len-1) for _ in range(max_states)]
         return cum_states[indices], cum_actions[indices]
 
-
-
-def _deprecated():
-    # this does not work as intended
-    # move = self.environment._build_move(action_dict)
-    # int_action = self.environment.game.get_move_uid(move)  # 0 <= move_uid < max_moves()
-    # one_hot_action = [0 for _ in range(self.environment.game.max_moves())]
-    # one_hot_action[int_action] = 1
-    # return one_hot_action
-    pass
 
