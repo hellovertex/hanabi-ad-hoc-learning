@@ -20,7 +20,7 @@ def get_model(observation_size,
     layers = []
     for i in range(num_hidden_layers + 1):
         layers.append(Linear(in_features[i], out_features[i]))
-        layers.append(ReLU)
+        layers.append(ReLU())
 
     return torch.nn.Sequential(*layers)
 

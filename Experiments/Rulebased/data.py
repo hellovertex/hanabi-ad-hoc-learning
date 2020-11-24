@@ -14,7 +14,6 @@ class IterableStatesCollection(torch.utils.data.IterableDataset):
     # to create a new iterator, and by calling iter() on the loader it returns an instance of
     # torch.utils.data._BaseDataLoaderIter which happens to implement __next__ and is thus a generator
 
-
     def __init__(self,
                  agent_classes: Dict[str, ra.RulebasedAgent],
                  num_players: int,
@@ -37,14 +36,18 @@ class IterableStatesCollection(torch.utils.data.IterableDataset):
             yield torch.from_numpy(states).type(torch.FloatTensor), torch.max(torch.from_numpy(actions), 1)[1]
 
     def get_states(self):
-        states, actions = self._data_collector.collect(self._len_iter, agent_id=self._agent_id, games_per_group=10)
+        states, actions = self._data_collector.collect(drop_actions=False,
+                                                       max_states=self._len_iter,
+                                                       agent_id=self._agent_id,
+                                                       games_per_group=10)
         # states, actions = torch.from_numpy(states).type(torch.FloatTensor), torch.max(torch.from_numpy(actions), 1)[1]
-        states, actions = torch.from_numpy(states).type(torch.FloatTensor), torch.from_numpy(actions).type(torch.IntTensor)
+        states, actions = torch.from_numpy(states).type(torch.FloatTensor), torch.from_numpy(actions).type(
+            torch.LongTensor)
         n = int(self._len_iter / self._batch_size)
-        for s, a in zip([states[i:i+self._batch_size] for i in range(n)], [actions[i:i+self._batch_size] for i in range(n)]):
+        for s, a in zip([states[i:i + self._batch_size] for i in range(n)],
+                        [actions[i:i + self._batch_size] for i in range(n)]):
             yield s, a
 
     def __iter__(self):
         return iter(self.get_states())
 # todo filter state action pairs by agent
-
