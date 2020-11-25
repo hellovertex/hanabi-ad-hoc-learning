@@ -50,4 +50,4 @@ class IterableStatesCollection(torch.utils.data.IterableDataset):
 
     def __iter__(self):
         return iter(self.get_states())
-# todo filter state action pairs by agent
+

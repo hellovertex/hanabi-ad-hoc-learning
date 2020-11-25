@@ -1,3 +1,4 @@
+import os
 from time import time
 import torch
 import torch.optim as optim
@@ -49,9 +50,10 @@ def eval(net, testloader, criterion):
 
 
 def train_eval(config,
+               checkpoint_dir=None,
                max_train_epochs=20,
                eval_interval=200,
-               max_dataset_size=1e4,  # do not change this
+               max_dataset_size=1e4,  # do not increase much (linear runtime)
                max_eval_iter=50):
     agent = config['agent']
     lr = config['lr']
@@ -98,6 +100,9 @@ def train_eval(config,
                 eval_loss, eval_acc = eval(model, testloader, criterion)
                 # print(f'(Loss, accuracy) at iteration {i} = {eval_loss, eval_acc}')
                 tune.report(loss=eval_loss, acc=eval_acc)
+                with tune.checkpoint_dir(step=i) as checkpoint_dir:
+                    path = os.path.join(checkpoint_dir, 'checkpoint')
+                    torch.save((model.state_dict, optimizer.state_dict), path)
 
 
 DEBUG = True
@@ -131,7 +136,7 @@ def main():
 
     # analysis = tune.run(train_fn,
     #                     config=search_space,
-    #                     num_samples=1,
+    #                     num_samples=10,
     #                     scheduler=ASHAScheduler(metric="loss", mode="min", max_t=20),
     #                     progress_reporter=CLIReporter(metric_columns=["loss", "acc", "training_iteration"]))
     # best_trial = analysis.get_best_trial("loss", "min")
