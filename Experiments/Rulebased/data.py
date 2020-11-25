@@ -76,12 +76,14 @@ class StateActionWriter:
         # if path_to_db does not exists, create a file, otherwise append to database
         #        x          x       x      x       x        x
         # | num_players | agent | turn | state | action | team |
-        self._data_collector.collect(max_states=num_rows_to_add,
-                                     insert_to_database_at=path_to_db)
-
+        collected = 0
+        while collected < num_rows_to_add:
+            self._data_collector.collect(max_states=1000,  # only thousand at once because its slow otherwise
+                                         insert_to_database_at=path_to_db)
+            collected += 1000
 
 def test_writer():
     writer = StateActionWriter(AGENT_CLASSES, 3)
-    writer.collect_and_write_to_database('./database.db', 1000)
+    writer.collect_and_write_to_database('./database.db', 1e7)
 
 test_writer()
