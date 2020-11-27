@@ -84,6 +84,6 @@ class StateActionWriter:
 
 def test_writer():
     writer = StateActionWriter(AGENT_CLASSES, 3)
-    writer.collect_and_write_to_database('./database.db', 1e7)
+    writer.collect_and_write_to_database('./database.db', 250000)
 
 test_writer()
