@@ -80,12 +80,14 @@ class Runner:
             agents: List[NamedTuple],  # Agent('name', 'ra.RulebasedAgent()')
             max_games=1,
             target_agent: Optional[str] = None,
-            drop_actions=False):
+            drop_actions=False,
+            keep_obs_dict=False):
         """
         agents: Agent instances used to play game
         max_games: number of games to collect at maximum
         agent_target: if provided, only state-action pairs for corresponding agent are returned
         drop_actions: if True, only states will be returned without corresponding actions
+        keep_obs_dict: If true, returned replay_dict will also contain the observation_dict
         """
 
         i_game = 0
@@ -98,7 +100,7 @@ class Runner:
         for agent in agents:
             team.append(agent.name)
             try:
-                replay_dict[agent.name] = {'states': [], 'actions': [], 'turns': []}
+                replay_dict[agent.name] = {'states': [], 'actions': [], 'turns': [], 'obs_dict': []}
             except:
                 # goes here if we have more than one copy of the same agent(key)
                 pass
@@ -131,6 +133,8 @@ class Runner:
                             if not drop_actions:
                                 replay_dict[agent.name]['actions'].append(to_int(current_player_action))
                             replay_dict[agent.name]['turns'].append(turn_in_game_i)
+                            replay_dict[agent.name]['obs_dict'].append(observation)
+
                             turns_played += 1
                             turn_in_game_i += 1
                     else:
@@ -192,24 +196,36 @@ class StateActionCollector:
     statelist = List[List]
     actionlist = List
 
-    def write_to_database(self, path, replay_dictionary, team):
+    def write_to_database(self, path, replay_dictionary, team, obs_dict_kept):
 
         #        x          x       x      x       x        x
         # | num_players | agent | turn | state | action | team |
+        # current_player: 0
+        # current_player_offset: 0
+        # deck_size: 40
+        # discard_pile: []
+        # fireworks: {}
+        # information_tokens: 8
+        # legal_moves: [{}, ..., {}]
+        # life_tokens: 3
+        # observed_hands: [[{},...,{}], ..., [{},...,{}]]
+        # num_players: 2
+        # vectorized:
 
         # creates database at path, if it does not exist already
         conn = db.create_connection(path)
         # if table exists, appends dictionary data, otherwise it creates the table first and then inserts
         replay_dictionary['team'] = [agent.name for agent in team]
         replay_dictionary['num_players'] = self.num_players
-        db.insert_dictionary_data(conn, replay_dictionary)
+        db.insert_data(conn, replay_dictionary, obs_dict_kept)
 
     def collect(self,
                 drop_actions=False,
                 max_states=1000,
                 target_agent=None,
                 games_per_group=1,
-                insert_to_database_at: Optional[str] = None) -> Tuple[statelist, actionlist]:
+                insert_to_database_at: Optional[str] = None,
+                keep_obs_dict=False) -> Tuple[statelist, actionlist]:
         """
         Play Hanabi games to collect states (and maybe actions) until max_states are collected.
 
@@ -244,32 +260,37 @@ class StateActionCollector:
             replay_dictionary, num_turns_played = self.runner.run(players,
                                                                   max_games=games_per_group,
                                                                   target_agent=target_agent,
-                                                                  drop_actions=drop_actions)
+                                                                  drop_actions=drop_actions,
+                                                                  keep_obs_dict=keep_obs_dict)
+            # 1. write to database
             if insert_to_database_at:
                 self.write_to_database(path=insert_to_database_at,
                                        replay_dictionary=replay_dictionary,
-                                       team=players)
+                                       team=players,
+                                       obs_dict_kept=keep_obs_dict)
+            # Xor 2. keep data until return
+            else:
+                for key, val in replay_dictionary.items():
+                    if not isinstance(cum_states, np.ndarray):
+                        cum_states = np.array(val['states'])
+                        cum_actions = np.array(val['actions'])
+                    else:
+                        try:
+                            cum_states = np.concatenate((cum_states, val['states']))
+                            cum_actions = np.concatenate((cum_actions, val['actions']))
+                        except ValueError as e:
+                            # goes here if states or actions are empty
+                            # (because we dropped actions or the corresponding agent didnt make any moves)
 
-            for key, val in replay_dictionary.items():
-                if not isinstance(cum_states, np.ndarray):
-                    cum_states = np.array(val['states'])
-                    cum_actions = np.array(val['actions'])
-                else:
-                    try:
-                        cum_states = np.concatenate((cum_states, val['states']))
-                        cum_actions = np.concatenate((cum_actions, val['actions']))
-                    except ValueError as e:
-                        # goes here if states or actions are empty
-                        # (because we dropped actions or the corresponding agent didnt make any moves)
-
-                        # print(e)
-                        # print(cum_states, cum_actions, agents, num_states)
-                        # exit(1)
-                        pass
+                            # print(e)
+                            # print(cum_states, cum_actions, agents, num_states)
+                            # exit(1)
+                            pass
             # cumulated stats
             num_states += num_turns_played
 
-        # return random subset of cum_states, cum_actions
-        max_len = len(cum_states)
-        indices = [random.randint(0, max_len - 1) for _ in range(max_states)]
-        return cum_states[indices], cum_actions[indices]
+        if not insert_to_database_at:
+            # return random subset of cum_states, cum_actions
+            max_len = len(cum_states)
+            indices = [random.randint(0, max_len - 1) for _ in range(max_states)]
+            return cum_states[indices], cum_actions[indices]

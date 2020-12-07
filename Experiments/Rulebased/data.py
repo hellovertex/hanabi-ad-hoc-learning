@@ -18,6 +18,7 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
+
 class IterableStatesCollection(torch.utils.data.IterableDataset):
     # the iter() call of the dataset streams data to the loader who can batch, shuffle, transform it
     # to create a new iterator, and by calling iter() on the loader it returns an instance of
@@ -65,6 +66,7 @@ class StateActionWriter:
     """ - Collects states and actions using the StateActionCollector
         - writes them to database
     """
+
     def __init__(self,
                  agent_classes: Dict[str, ra.RulebasedAgent],
                  num_players: int,
@@ -72,18 +74,23 @@ class StateActionWriter:
                  target_agent: Optional[str] = None):
         self._data_collector = StateActionCollector(agent_classes, num_players, target_agent)
 
-    def collect_and_write_to_database(self, path_to_db, num_rows_to_add):
+    def collect_and_write_to_database(self, path_to_db, num_rows_to_add, use_state_dict=False):
         # if path_to_db does not exists, create a file, otherwise append to database
         #        x          x       x      x       x        x
         # | num_players | agent | turn | state | action | team |
+        """ If use_state_dict is True, a different table will be used, that stores the
+        observation as a dictionary """
         collected = 0
         while collected < num_rows_to_add:
             self._data_collector.collect(max_states=1000,  # only thousand at once because its slow otherwise
-                                         insert_to_database_at=path_to_db)
+                                         insert_to_database_at=path_to_db,
+                                         keep_obs_dict=use_state_dict)
             collected += 1000
 
-def test_writer():
-    writer = StateActionWriter(AGENT_CLASSES, 3)
-    writer.collect_and_write_to_database('./database.db', 250000)
 
-test_writer()
+def test_writer(path_to_db, num_rows_to_add, use_state_dict=False):
+    writer = StateActionWriter(AGENT_CLASSES, 3)
+    writer.collect_and_write_to_database(path_to_db, num_rows_to_add, use_state_dict=use_state_dict)
+
+
+test_writer(path_to_db='./database_test.db', num_rows_to_add=1e3, use_state_dict=True)
