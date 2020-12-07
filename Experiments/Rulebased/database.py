@@ -22,8 +22,8 @@ def create_connection(path):
     return None
 
 
-def insert_data(conn, replay_dictionary, obs_dict_kept):
-    if obs_dict_kept:
+def insert_data(conn, replay_dictionary, with_obs_dict):
+    if with_obs_dict:
         insert_state_dict_data(conn, replay_dictionary)
     else:
         insert_vectorized_data(conn, replay_dictionary)

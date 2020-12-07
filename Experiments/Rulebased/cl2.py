@@ -196,7 +196,7 @@ class StateActionCollector:
     statelist = List[List]
     actionlist = List
 
-    def write_to_database(self, path, replay_dictionary, team, obs_dict_kept):
+    def write_to_database(self, path, replay_dictionary, team, with_obs_dict):
 
         #        x          x       x      x       x        x
         # | num_players | agent | turn | state | action | team |
@@ -211,13 +211,14 @@ class StateActionCollector:
         # observed_hands: [[{},...,{}], ..., [{},...,{}]]
         # num_players: 2
         # vectorized:
+        # pyhanabi
 
         # creates database at path, if it does not exist already
         conn = db.create_connection(path)
         # if table exists, appends dictionary data, otherwise it creates the table first and then inserts
         replay_dictionary['team'] = [agent.name for agent in team]
         replay_dictionary['num_players'] = self.num_players
-        db.insert_data(conn, replay_dictionary, obs_dict_kept)
+        db.insert_data(conn, replay_dictionary, with_obs_dict)
 
     def collect(self,
                 drop_actions=False,
@@ -267,7 +268,7 @@ class StateActionCollector:
                 self.write_to_database(path=insert_to_database_at,
                                        replay_dictionary=replay_dictionary,
                                        team=players,
-                                       obs_dict_kept=keep_obs_dict)
+                                       with_obs_dict=keep_obs_dict)
             # Xor 2. keep data until return
             else:
                 for key, val in replay_dictionary.items():
