@@ -78,9 +78,8 @@ def insert_state_dict_data(conn, replay_dictionary):
         num_transitions = len(replay_dictionary[agent]['turns'])
         for i in range(num_transitions):
             # | num_players | agent | turn | state | action | team |
-            pyhanabi = replay_dictionary[agent]['obs_dict'][i]['pyhanabi']
-            obs = pyhanabi._observation
-            pyhanabi = pickle.dumps(obs, pickle.HIGHEST_PROTOCOL)
+            obs_pyhanabi = replay_dictionary[agent]['obs_dict'][i]['pyhanabi']
+            pyhanabi = pickle.dumps(obs_pyhanabi, pickle.HIGHEST_PROTOCOL)
             row = (num_players,
                    agent,
                    replay_dictionary[agent]['turns'][i],
@@ -98,7 +97,8 @@ def insert_state_dict_data(conn, replay_dictionary):
                    replay_dictionary[agent]['obs_dict'][i]['life_tokens'],
                    str(replay_dictionary[agent]['obs_dict'][i]['observed_hands']),
                    str(replay_dictionary[agent]['obs_dict'][i]['card_knowledge']),
-                   sqlite3.Binary(b'pyhanabi_goes_here')  # sqlite3.Binary(pyhanabi)
+                   # sqlite3.Binary(b'pyhanabi_goes_here')  # sqlite3.Binary(pyhanabi)
+                   sqlite3.Binary(pyhanabi)
                    )
             assert type(row[4]) == int, f'action was {row[4]}'
             assert 0 <= row[4] <= 50, f'action was {row[4]}'

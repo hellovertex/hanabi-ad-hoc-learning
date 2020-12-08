@@ -88,9 +88,9 @@ class StateActionWriter:
             collected += 1000
 
 
-def test_writer(path_to_db, num_rows_to_add, use_state_dict=False):
+def writer(path_to_db, num_rows_to_add, use_state_dict=False):
     writer = StateActionWriter(AGENT_CLASSES, 3)
     writer.collect_and_write_to_database(path_to_db, num_rows_to_add, use_state_dict=use_state_dict)
 
 
-test_writer(path_to_db='./database_test.db', num_rows_to_add=1e3, use_state_dict=True)
+writer(path_to_db='./database_test.db', num_rows_to_add=1e4, use_state_dict=True)

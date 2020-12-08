@@ -13,10 +13,11 @@
 # limitations under the License.
 """Simple Agent."""
 
-from rl_env import Agent
+from hanabi_learning_environment.rl_env import Agent
 import random
 import numpy as np
-import pyhanabi
+import hanabi_learning_environment.pyhanabi_pybind as pyhanabi
+import hanabi_learning_environment.pyhanabi as pyhanabi_plain
 import pdb
 
 global colors
@@ -28,7 +29,7 @@ num_in_deck_by_rank = [3,2,2,2,1] # Note: rank is zero-based
 # Note: depending on the object calling, card could either be a dict eg {'color':'R','rank':0} or a HanabiCard instance with c.color() and c.rank() methods
 def playable_card(card, fireworks):
   if isinstance(card,pyhanabi.HanabiCard):
-    card = {'color':colors[card.color()],'rank':card.rank()}
+    card = {'color':colors[card.color],'rank':card.rank}
 
   """A card is playable if it can be placed on the fireworks pile."""
   if card['color'] == None and card['rank'] != None:
@@ -46,17 +47,34 @@ def playable_card(card, fireworks):
 
 def useless_card(card,fireworks,max_fireworks):
   if isinstance(card,pyhanabi.HanabiCard):
-    card = {'color':colors[card.color()],'rank':card.rank()}
+    card = {'color':colors[card.color],'rank':card.rank}
   if card['rank'] < fireworks[card['color']]:
     return True
   if card['rank'] >= max_fireworks[card['color']]:
     return True
   return False
 
+def convert_to_pybind_color(color: int):
+  CTypes = [pyhanabi.HanabiCard.ColorType.kRed,
+            pyhanabi.HanabiCard.ColorType.kYellow,
+            pyhanabi.HanabiCard.ColorType.kGreen,
+            pyhanabi.HanabiCard.ColorType.kWhite,
+            pyhanabi.HanabiCard.ColorType.kBlue,
+            pyhanabi.HanabiCard.ColorType.kUnknownColor]
+  return CTypes[color]
 
+def convert_to_pybind_rank(rank: int):
+  CTypes = [pyhanabi.HanabiCard.RankType.k1,
+            pyhanabi.HanabiCard.RankType.k2,
+            pyhanabi.HanabiCard.RankType.k3,
+            pyhanabi.HanabiCard.RankType.k4,
+            pyhanabi.HanabiCard.RankType.k5,
+            pyhanabi.HanabiCard.RankType.kUnknownRank]
+  return CTypes[rank]
 
 def get_plausible_cards(observation, player_offset, hand_index):
-  card_knowledge = observation['pyhanabi'].card_knowledge()[player_offset]
+  # old: card_knowledge = observation['pyhanabi'].card_knowledge()[player_offset]
+  card_knowledge = observation['pyhanabi'].hands[player_offset].knowledge
   # print(card_knowledge)
   hidden_card = card_knowledge[hand_index]
   # print(hidden_card)
@@ -66,7 +84,9 @@ def get_plausible_cards(observation, player_offset, hand_index):
       # print(hidden_card.color_plausible(color_index))
       # print(hidden_card.rank_plausible(rank_index))
       if (hidden_card.color_plausible(color_index) and hidden_card.rank_plausible(rank_index)):
-        plausible_card = pyhanabi.HanabiCard(color_index,rank_index)
+        #color, rank = convert_to_pybind_color(color_index), convert_to_pybind_rank(rank_index)
+        #plausible_card = pyhanabi.HanabiCard(color, rank)
+        plausible_card = pyhanabi.HanabiCard(color_index, rank_index)
         plausible_cards.append(plausible_card)
   # print(plausible_cards)
   # pdb.set_trace()
@@ -116,14 +136,14 @@ def get_card_playability(observation, player_offset=0):
     playable_possibilities = 0
     plausible_cards = get_plausible_cards(observation,player_offset,hand_index)
     for plausible in plausible_cards:
-      num_in_deck = num_in_deck_by_rank[plausible.rank()]
+      num_in_deck = num_in_deck_by_rank[plausible.rank]
       for visible in visible_cards:
         # print(str(plausible) + " " + str(visible))
         # print(visible['color'])
         # print(plausible.color())
         # print(visible['rank'])
         # print(plausible.rank())
-        if visible['color'] == colors[plausible.color()] and visible['rank'] == plausible.rank():
+        if visible['color'] == colors[plausible.color] and visible['rank'] == plausible.rank:
           num_in_deck -=1
       total_possibilities += num_in_deck
       if playable_card(plausible,observation['fireworks']):
@@ -161,14 +181,14 @@ def get_probability_useless(observation, player_offset=0):
     useless_possibilities = 0
     plausible_cards = get_plausible_cards(observation,player_offset,hand_index)
     for plausible in plausible_cards:
-      num_in_deck = num_in_deck_by_rank[plausible.rank()]
+      num_in_deck = num_in_deck_by_rank[plausible.rank]
       for visible in visible_cards:
         # print(str(plausible) + " " + str(visible))
         # print(visible['color'])
         # print(plausible.color())
         # print(visible['rank'])
         # print(plausible.rank())
-        if visible['color'] == colors[plausible.color()] and visible['rank'] == plausible.rank():
+        if visible['color'] == colors[plausible.color] and visible['rank'] == plausible.rank:
           num_in_deck -=1
       total_possibilities += num_in_deck
       if useless_card(plausible,observation['fireworks'],max_fireworks):
@@ -258,8 +278,8 @@ class Ruleset():
       plausible_cards = get_plausible_cards(observation,0,card_index)
       eventually_playable=False
       for card in plausible_cards:
-        color = colors[card.color()]
-        rank = card.rank()
+        color = colors[card.color]
+        rank = card.rank
         # if (rank>=fireworks[color] and rank<max_fireworks[color]):
         if (rank<max_fireworks[color]):
           eventually_playable =True

@@ -2,7 +2,7 @@ import torch
 import sqlite3
 import numpy as np
 from torch.utils.data import DataLoader
-
+import pickle
 # project lvl imports
 import rulebased_agent as ra
 from internal_agent import InternalAgent
@@ -20,7 +20,7 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
 
 class PoolOfStates(torch.utils.data.IterableDataset):
     def __init__(self, from_db_path='./database.db',
-                 load_state_as_type: str = 'torch.FloatTensor',  # or 'dict'
+                 load_state_as_type='torch.FloatTensor',  # or 'dict'
                  drop_actions=False,
                  size=1e5,
                  target_table='pool_of_states',
@@ -48,18 +48,37 @@ class PoolOfStates(torch.utils.data.IterableDataset):
     def _parse_state(self, state: str, is_tuple=False):
         state = self._tolist(state, is_tuple)
         return torch.from_numpy(np.array(state))
-
-    def _parse_dict(self, db_row):
-        current_player, \
-        current_player_offset, \
-        deck_size, discard_pile, \
-        fireworks, \
-        information_tokens, \
-        legal_moves, \
-        life_tokens, \
-        observed_hands, \
-        num_players, \
-        vectorized = db_row
+    #
+    # def _parse_dict(self, db_row, action=False):
+    #     if action:
+    #         current_player, \
+    #         current_player_offset, \
+    #         deck_size, \
+    #         discard_pile, \
+    #         fireworks, \
+    #         information_tokens, \
+    #         legal_moves, \
+    #         life_tokens, \
+    #         observed_hands, \
+    #         card_knowledge, \
+    #         pyhanabi, \
+    #         num_players, \
+    #         state, \
+    #         action = db_row
+    #     else:
+    #         current_player, \
+    #         current_player_offset, \
+    #         deck_size, \
+    #         discard_pile, \
+    #         fireworks, \
+    #         information_tokens, \
+    #         legal_moves, \
+    #         life_tokens, \
+    #         observed_hands, \
+    #         card_knowledge, \
+    #         pyhanabi, \
+    #         num_players, \
+    #         state = db_row
 
     def _yield_vectorized(self):
         cursor = self._connection.cursor()
@@ -88,21 +107,12 @@ class PoolOfStates(torch.utils.data.IterableDataset):
                        f'life_tokens, '
                        f'observed_hands, '
                        f'card_knowledge, '
+                       f'pyhanabi, '
                        f'num_players, '
                        f'state{action} from pool_of_state_dicts')
         if self._drop_actions:
             for row in cursor:
-                current_player, \
-                current_player_offset, \
-                deck_size, discard_pile, \
-                fireworks, \
-                information_tokens, \
-                legal_moves, \
-                life_tokens, \
-                observed_hands, \
-                card_knowledge, \
-                num_players, \
-                vectorized = row
+                current_player, current_player_offset, deck_size, discard_pile, fireworks, information_tokens, legal_moves, life_tokens, observed_hands, card_knowledge, pyhanabi, num_players, vectorized = row
                 obs_dict['current_player'] = current_player
                 obs_dict['current_player_offset'] = current_player_offset
                 obs_dict['deck_size'] = deck_size
@@ -113,10 +123,12 @@ class PoolOfStates(torch.utils.data.IterableDataset):
                 obs_dict['life_tokens'] = life_tokens
                 obs_dict['observed_hands'] = eval(observed_hands)
                 obs_dict['card_knowledge'] = eval(card_knowledge)
+                # obs_dict['pyhanabi'] = pickle.loads(pyhanabi)
                 obs_dict['num_players'] = num_players
                 obs_dict['vectorized'] = eval(vectorized)
-                # todo currently trying to find a way to serialize or reconstruct the pyhanabi objects
                 yield obs_dict
+            else:
+                raise NotImplementedError
 
     def get_rows_lazily(self):
         if self._load_state_as_type == 'torch.FloatTensor':
@@ -165,24 +177,27 @@ def update_model(*args):
 
 def train_eval(config,
                target_agent_cls,
-               from_db_path='./database2.db',
+               from_db_path='./database_test.db',
                target_table='pool_of_states'):
     # pool of states
     # todo consider using ray to centralize dataloading to avoid racing for database
-    dataset = PoolOfStates(from_db_path=from_db_path, batch_size=1,drop_actions=True, load_state_as_type='dict')
+    dataset = PoolOfStates(from_db_path=from_db_path, batch_size=1, drop_actions=True, load_state_as_type='dict')
     dataloader = DataLoader(dataset, batch_size=None)
 
     target_agent = target_agent_cls(config)
     # model = Model(config)
+    i = 0
     for state in dataloader:
+        if i == 1:
+            break
         state = state[0]
         print(state)
-        action = target_agent.act(state)
-        print(f'action was {action}')
-        break
+        # action = target_agent.act(state)
+        # print(f'action was {action}')
+        i += 1
+
         # predicted = model(state)
         # update_model(action, predicted)
-
 
 def main():
     # todo include num_players to sql query
@@ -193,5 +208,16 @@ def main():
                target_agent_cls=target_agent_cls)
 
 
+def test_pickling():
+    conn = sqlite3.connect('./database_test.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT pyhanabi from pool_of_state_dicts')
+    for row in cursor:
+        print(row)
+        pyhanabi = pickle.loads(row[0])
+        print(pyhanabi)
+        break
+
 if __name__ == '__main__':
-    main()
+    # main()
+    test_pickling()

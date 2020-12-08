@@ -13,7 +13,7 @@
 # limitations under the License.
 """Simple Agent."""
 
-from rl_env import Agent
+from hanabi_learning_environment.rl_env import Agent
 from rulebased_agent import RulebasedAgent
 from ruleset import Ruleset
 

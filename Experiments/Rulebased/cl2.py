@@ -18,7 +18,7 @@ import random
 from collections import namedtuple
 from typing import NamedTuple
 import database as db
-
+print(rl_env.__file__)
 AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
