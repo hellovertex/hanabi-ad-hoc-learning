@@ -100,7 +100,7 @@ class Runner:
         for agent in agents:
             team.append(agent.name)
             try:
-                replay_dict[agent.name] = {'states': [], 'actions': [], 'turns': [], 'obs_dict': []}
+                replay_dict[agent.name] = {'states': [], 'int_actions': [], 'dict_actions': [], 'turns': [], 'obs_dict': []}
             except:
                 # goes here if we have more than one copy of the same agent(key)
                 pass
@@ -131,7 +131,8 @@ class Runner:
                             replay_dict[agent.name]['states'].append(
                                 observation['vectorized'] + binary_encoded_player_index)
                             if not drop_actions:
-                                replay_dict[agent.name]['actions'].append(to_int(current_player_action))
+                                replay_dict[agent.name]['int_actions'].append(to_int(current_player_action))
+                                replay_dict[agent.name]['dict_actions'].append(current_player_action)
                             replay_dict[agent.name]['turns'].append(turn_in_game_i)
                             replay_dict[agent.name]['obs_dict'].append(observation)
 

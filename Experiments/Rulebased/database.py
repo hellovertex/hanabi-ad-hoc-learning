@@ -55,7 +55,8 @@ def insert_state_dict_data(conn, replay_dictionary):
         agent TEXT, 
         turn INTEGER, 
         state TEXT, 
-        action INTEGER, 
+        int_action INTEGER,
+        dict_action TEXT, 
         team TEXT, 
         current_player INTEGER, 
         current_player_offset INTEGER, 
@@ -78,13 +79,16 @@ def insert_state_dict_data(conn, replay_dictionary):
         num_transitions = len(replay_dictionary[agent]['turns'])
         for i in range(num_transitions):
             # | num_players | agent | turn | state | action | team |
+            obs = replay_dictionary[agent]['obs_dict'][i]
             obs_pyhanabi = replay_dictionary[agent]['obs_dict'][i]['pyhanabi']
             pyhanabi = pickle.dumps(obs_pyhanabi, pickle.HIGHEST_PROTOCOL)
+            # todo compare pyhanabi hands and card_knowledge for sanity
             row = (num_players,
                    agent,
                    replay_dictionary[agent]['turns'][i],
                    str(replay_dictionary[agent]['states'][i]),
-                   replay_dictionary[agent]['actions'][i],
+                   replay_dictionary[agent]['int_actions'][i],
+                   str(replay_dictionary[agent]['dict_actions'][i]),
                    team,
                    # parse observation_dictionary
                    replay_dictionary[agent]['obs_dict'][i]['current_player'],
@@ -105,7 +109,7 @@ def insert_state_dict_data(conn, replay_dictionary):
             values.append(row)
             # todo pickling pyhanabi
 
-    cursor.executemany('INSERT INTO pool_of_state_dicts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', values)
+    cursor.executemany('INSERT INTO pool_of_state_dicts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', values)
     conn.commit()
 
 

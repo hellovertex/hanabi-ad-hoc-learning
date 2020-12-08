@@ -75,6 +75,8 @@ def convert_to_pybind_rank(rank: int):
 def get_plausible_cards(observation, player_offset, hand_index):
   # old: card_knowledge = observation['pyhanabi'].card_knowledge()[player_offset]
   card_knowledge = observation['pyhanabi'].hands[player_offset].knowledge
+  #print(f'card_knowledge = {card_knowledge}')
+  #print(f'hand_index = {hand_index}')
   # print(card_knowledge)
   hidden_card = card_knowledge[hand_index]
   # print(hidden_card)
@@ -339,8 +341,9 @@ class Ruleset():
     #   action = {'action_type': 'PLAY', 'card_index': card_index}
     #   return action
 
-    for card_index, card in enumerate(observation['card_knowledge'][0]):
-      plausible_cards = get_plausible_cards(observation,PLAYER_OFFSET,card_index)
+    #for card_index, card in enumerate(observation['card_knowledge'][0]):
+    for card_index, card in enumerate(observation['pyhanabi'].hands[PLAYER_OFFSET].knowledge):
+      plausible_cards = get_plausible_cards(observation, PLAYER_OFFSET, card_index)
       definetly_playable = True
       for plausible in plausible_cards:
         if not playable_card(plausible,fireworks):
