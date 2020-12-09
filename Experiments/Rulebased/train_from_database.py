@@ -22,6 +22,7 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
 
 class QueryColumns(enum.IntEnum):
   """ Columns sorted according to database layout """
+  # todo remove this
   num_players = 0
   agent = 1
   turn = 2
@@ -44,7 +45,7 @@ class QueryColumns(enum.IntEnum):
 
 class PoolOfStates(torch.utils.data.IterableDataset):
   def __init__(self, from_db_path='./database.db',
-               load_state_as_type='torch.FloatTensor',  # or 'dict'
+               load_state_as_type='dict',  # or 'dict'
                drop_actions=False,
                size=1e5,
                target_table='pool_of_states',
@@ -74,87 +75,13 @@ class PoolOfStates(torch.utils.data.IterableDataset):
                         'card_knowledge',
                         'vectorized',
                         'pyhanabi']
+    actions = [] if self._drop_actions else ['int_action', 'dict_action ']
+    self.query_vars += actions
 
   @staticmethod
-  def _tolist(state: str, is_tuple=False):
-    if is_tuple:
-      state = state[0]
-    state = eval(state)
-    assert isinstance(state, list)
-    return state
-
-  def _parse_state(self, state: str, is_tuple=False):
-    state = self._tolist(state, is_tuple)
-    return torch.from_numpy(np.array(state))
-
-  def _yield_vectorized(self):
-    cursor = self._connection.cursor()
-    action = "" if self._drop_actions else ", action"
-
-    cursor.execute(f'SELECT state{action} from pool_of_states')
-    if self._drop_actions:
-      for state in cursor:
-        yield self._parse_state(state, is_tuple=True)
-    else:
-      for row in cursor:
-        state, action = row
-        yield self._parse_state(state), action
-
-  def _parse_row_as_dict(self, row):
-    # todo: remove this, @deprecated
-    obs_dict = {}
-    if not self._drop_actions:
-      agent, current_player, current_player_offset, deck_size, discard_pile, fireworks, information_tokens, legal_moves, life_tokens, observed_hands, card_knowledge, pyhanabi, num_players, vectorized = row
-      obs_dict['current_player'] = current_player
-      obs_dict['current_player_offset'] = current_player_offset
-      obs_dict['deck_size'] = deck_size
-      obs_dict['discard_pile'] = eval(discard_pile)
-      obs_dict['fireworks'] = eval(fireworks)
-      obs_dict['information_tokens'] = information_tokens
-      obs_dict['legal_moves'] = eval(legal_moves)
-      obs_dict['life_tokens'] = life_tokens
-      obs_dict['observed_hands'] = eval(observed_hands)
-      obs_dict['card_knowledge'] = eval(card_knowledge)
-      obs_dict['pyhanabi'] = pickle.loads(pyhanabi)
-      obs_dict['num_players'] = num_players
-      obs_dict['vectorized'] = eval(vectorized)
-      obs_dict['agent'] = agent
-    else:
-      current_player = 0
-      obs_dict[str(current_player)]
-      agent, current_player, current_player_offset, deck_size, discard_pile, fireworks, information_tokens, legal_moves, life_tokens, observed_hands, card_knowledge, pyhanabi, num_players, vectorized, int_action, dict_action = row
-      obs_dict['current_player'] = current_player
-      obs_dict['current_player_offset'] = current_player_offset
-      obs_dict['deck_size'] = deck_size
-      obs_dict['discard_pile'] = eval(discard_pile)
-      obs_dict['fireworks'] = eval(fireworks)
-      obs_dict['information_tokens'] = information_tokens
-      obs_dict['legal_moves'] = eval(legal_moves)
-      obs_dict['life_tokens'] = life_tokens
-      obs_dict['observed_hands'] = eval(observed_hands)
-      obs_dict['card_knowledge'] = eval(card_knowledge)
-      obs_dict['pyhanabi'] = pickle.loads(pyhanabi)
-      obs_dict['num_players'] = num_players
-      obs_dict['vectorized'] = eval(vectorized)
-      obs_dict['int_action'] = int_action
-      obs_dict['dict_action'] = dict_action
-      obs_dict['agent'] = agent
-
-    return obs_dict
-
-  def _parse_row(self, row, mode='as_dict'):
-    if mode == 'as_dict':
-      self._parse_row_as_dict(row)
-    elif mode == 'as_torch.Tensor':
-      raise NotImplementedError
-    else:
-      raise ValueError(f"Unknown mode: Given was {mode} but expected 'as_dict' or 'as_torch.Tensor' ")
-
-
-
-  def _build_query(self, query_columns: list, table='pool_of_state_dicts') -> str:
-    actions = [] if self._drop_actions else ['int_action ', 'dict_action ']
-    query_cols = [col+ ' ' for col in query_columns] + actions
+  def _build_query(query_columns: list, table='pool_of_state_dicts') -> str:
+    query_cols = [col+ ', ' for col in query_columns]
+    query_cols[-1] = query_cols[-1][:-2]  # remove last ,
     query_string = ['SELECT '] + query_cols + ['from ' + table]
     return "".join(query_string)
 
@@ -162,17 +89,18 @@ class PoolOfStates(torch.utils.data.IterableDataset):
     cursor = self._connection.cursor()
     obs_dict = {}
     query_string = self._build_query(self.query_vars)
+    # query database with all the information necessary to build the observation_dictionary
     cursor.execute(query_string)
-
-    for row in cursor:
-      for var in self.query_vars:
-        obs_dict[QueryColumns[var].name] = row[QueryColumns[var].value]
-
+    # parse query
+    for row in cursor:  # database row
+      for i, var in enumerate(self.query_vars):  # assign columns of query to corresponding key in observation_dict
+        obs_dict[var] = row[i]
+      # yield row by row the observation_dictionary unpacked from that row
       yield obs_dict
 
   def get_rows_lazily(self):
     if self._load_state_as_type == 'torch.FloatTensor':
-      return self._yield_vectorized()
+      raise NotImplementedError
     elif self._load_state_as_type == 'dict':
       return self._yield_dict()
     else:
