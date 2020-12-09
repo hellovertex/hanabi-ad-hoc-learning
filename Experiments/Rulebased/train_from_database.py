@@ -14,7 +14,8 @@ from piers_agent import PiersAgent
 from van_den_bergh_agent import VanDenBerghAgent
 import traceback
 import enum
-
+import model
+import torch.optim as optim
 AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
@@ -26,7 +27,7 @@ class PoolOfStates(torch.utils.data.IterableDataset):
                drop_actions=False,
                size=1e5,
                target_table='pool_of_states',
-               batch_size=4,
+               batch_size=1,
                load_lazily=True):
     super(PoolOfStates).__init__()
     self._from_db_path = from_db_path  # path to .db file
@@ -35,20 +36,21 @@ class PoolOfStates(torch.utils.data.IterableDataset):
     self._target_table = target_table
     self._connection = sqlite3.connect(self._from_db_path)
     self._batch_size = batch_size
+    if batch_size != 1: raise NotImplementedError
     self._load_lazily = load_lazily
     assert load_state_as_type in ['torch.FloatTensor', 'dict'], 'states must be either torch.FloatTensor or dict'
     self._load_state_as_type = load_state_as_type
     self.QUERY_VARS = ['num_players',
-                        'agent',
-                        'current_player',
-                        'current_player_offset',
-                        'deck_size',
-                        'discard_pile',
-                        'fireworks',
-                        'information_tokens',
-                        'legal_moves',
-                        'life_tokens',
-                        'observed_hands',
+                       'agent',
+                       'current_player',
+                       'current_player_offset',
+                       'deck_size',
+                       'discard_pile',
+                       'fireworks',
+                       'information_tokens',
+                       'legal_moves',
+                       'life_tokens',
+                       'observed_hands',
                        'card_knowledge',
                        'vectorized',
                        'pyhanabi']
@@ -139,17 +141,6 @@ dataset = PoolOfStates(drop_actions=True)
 dataloader = DataLoader(dataset, batch_size=None)
 
 
-class Model:
-  def __init__(self, config):
-    self.config = config
-
-  def __call__(self, *args, **kwargs):
-    return 1
-
-
-def update_model(*args):
-  pass
-
 
 def train_eval_test(config,
                     target_agent_cls,
@@ -184,6 +175,29 @@ def train_eval_test(config,
     # predicted = model(state)
     # update_model(action, predicted)
 
+
+def train_eval(config,
+               target_agent_cls,
+               from_db_path='./database_test.db',
+               target_table='pool_of_states'):
+  # todo use ray to centralize dataloading
+  dataset = PoolOfStates(from_db_path=from_db_path, batch_size=1, drop_actions=False, load_state_as_type='dict')
+  dataloader = DataLoader(dataset, batch_size=None)
+
+  target_agent = target_agent_cls(config)
+  net = model.get_model(observation_size=956, num_actions=30, num_hidden_layers=1, layer_size=512)
+  criterion = torch.nn.CrossEntropyLoss()
+  optimizer = optim.Adam(net.parameters(), lr=0.001)
+  for state in dataloader:
+    observation = state[0]
+    action = target_agent.act(observation)
+    # action = parse to torch.Tensor
+    vectorized = observation['vectorized']
+    optimizer.zero_grad()
+    outputs = net(vectorized)
+    loss = criterion(outputs, action)
+    loss.backward()
+    optimizer.step()
 
 def main():
   # todo include num_players to sql query

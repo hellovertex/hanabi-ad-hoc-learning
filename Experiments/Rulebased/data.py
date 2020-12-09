@@ -93,4 +93,4 @@ def writer(path_to_db, num_rows_to_add, use_state_dict=False):
     writer.collect_and_write_to_database(path_to_db, num_rows_to_add, use_state_dict=use_state_dict)
 
 
-writer(path_to_db='./database_test.db', num_rows_to_add=1e3, use_state_dict=True)
+writer(path_to_db='./database_test.db', num_rows_to_add=500, use_state_dict=True)
