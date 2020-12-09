@@ -65,7 +65,7 @@ class Runner:
     for agent in agents:
       team.append(agent.name)
       try:
-        replay_dict[agent.name] = {'states': [],
+        replay_dict[agent.name] = {  # 'states': [],
                                    'int_actions': [],
                                    'dict_actions': [],
                                    'turns': [],  # integer indicating which turn of the game it is
@@ -73,11 +73,17 @@ class Runner:
       except:
         # goes here if we have more than one copy of the same agent(key)
         pass
-      return replay_dict, team
+    return replay_dict, team
 
   @staticmethod
-  def update_replay_dict(replay_dict, agent, observation, current_player_action, drop_actions, agent_index,
+  def update_replay_dict(replay_dict,
+                         agent,
+                         observation,
+                         current_player_action,
+                         drop_actions,
+                         agent_index,
                          turn_in_game_i):
+    # todo compare pyhanabi hands and card_knowledge for sanity
     if not drop_actions:
       replay_dict[agent.name]['int_actions'].append(-1)  # to_int_action() currently bugged
       replay_dict[agent.name]['dict_actions'].append(current_player_action)
@@ -87,7 +93,7 @@ class Runner:
     # # only temporarily, 3 bit number indicating the player position
     # util_encoding = [int(i) for i in f'{agent_index:03b}']
     # todo remove key 'states', currenyly kept for compatibility
-    replay_dict[agent.name]['states'].append(observation['vectorized'])  # + util_encoding)
+    # replay_dict[agent.name]['states'].append(observation['vectorized'])  # + util_encoding)
 
     return replay_dict
 
@@ -173,7 +179,7 @@ class StateActionCollector:
                                             instance=agent_cls({'players': self.num_players}))
     self.initialized_agents = initialized_agents  # Dict[str, NamedTuple]
 
-  def get_players(self, k, target_agent: Optional[str] = None) -> List[NamedTuple]:
+  def _get_players(self, k, target_agent: Optional[str] = None) -> List[NamedTuple]:
     """
     If target_agent is specified, it will be one of the players
     """
@@ -230,7 +236,7 @@ class StateActionCollector:
     later states in the game, some have different hinted cards, etc. depending on the
     agents used to play.
 
-    if agent_id is provided, the states and actions returned correspond only to corresponding agent
+    if target_agent is provided, the states and actions returned belong only to corresponding agent
     """
     if target_agent:
       assert target_agent in AGENT_CLASSES.keys(), f"Unkown Agent identifier: {target_agent}"
@@ -244,7 +250,7 @@ class StateActionCollector:
 
     while num_states < max_states:
       # play one game with randomly sampled agents
-      players = self.get_players(k=k, target_agent=target_agent)
+      players = self._get_players(k=k, target_agent=target_agent)
       replay_dictionary, num_turns_played = self.runner.run(players,
                                                             max_games=games_per_group,
                                                             target_agent=target_agent,

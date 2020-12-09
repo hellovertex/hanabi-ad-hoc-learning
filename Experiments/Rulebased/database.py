@@ -53,8 +53,7 @@ def insert_state_dict_data(conn, replay_dictionary):
     cursor.execute(''' CREATE TABLE IF NOT EXISTS pool_of_state_dicts( 
         num_players INTEGER , 
         agent TEXT, 
-        turn INTEGER, 
-        state TEXT, 
+        turn INTEGER,  
         int_action INTEGER,
         dict_action TEXT, 
         team TEXT, 
@@ -68,6 +67,7 @@ def insert_state_dict_data(conn, replay_dictionary):
         life_tokens INTEGER, 
         observed_hands TEXT,
         card_knowledge TEXT,
+        vectorized TEXT,
         pyhanabi BLOB
         )''')
     # conn.commit()
@@ -79,14 +79,13 @@ def insert_state_dict_data(conn, replay_dictionary):
         num_transitions = len(replay_dictionary[agent]['turns'])
         for i in range(num_transitions):
             # | num_players | agent | turn | state | action | team |
-            obs = replay_dictionary[agent]['obs_dict'][i]
+            # obs = replay_dictionary[agent]['obs_dict'][i]
             obs_pyhanabi = replay_dictionary[agent]['obs_dict'][i]['pyhanabi']
             pyhanabi = pickle.dumps(obs_pyhanabi, pickle.HIGHEST_PROTOCOL)
-            # todo compare pyhanabi hands and card_knowledge for sanity
+
             row = (num_players,
                    agent,
                    replay_dictionary[agent]['turns'][i],
-                   str(replay_dictionary[agent]['states'][i]),
                    replay_dictionary[agent]['int_actions'][i],
                    str(replay_dictionary[agent]['dict_actions'][i]),
                    team,
@@ -101,13 +100,14 @@ def insert_state_dict_data(conn, replay_dictionary):
                    replay_dictionary[agent]['obs_dict'][i]['life_tokens'],
                    str(replay_dictionary[agent]['obs_dict'][i]['observed_hands']),
                    str(replay_dictionary[agent]['obs_dict'][i]['card_knowledge']),
+                   str(replay_dictionary[agent]['obs_dict'][i]['vectorized']),
                    # sqlite3.Binary(b'pyhanabi_goes_here')  # sqlite3.Binary(pyhanabi)
                    sqlite3.Binary(pyhanabi)
                    )
-            assert type(row[4]) == int, f'action was {row[4]}'
-            assert 0 <= row[4] <= 50, f'action was {row[4]}'
+            assert type(row[3]) == int, f'action was {row[4]}'
+
+
             values.append(row)
-            # todo pickling pyhanabi
 
     cursor.executemany('INSERT INTO pool_of_state_dicts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', values)
     conn.commit()
@@ -123,29 +123,30 @@ def insert_vectorized_data(conn, replay_dictionary):
     - replay_dictionary['OuterAgent']['actions']: List[int]
     - replay_dictionary['OuterAgent']['turns']: List[int]
     """
-    cursor = conn.cursor()
-    # create table if it does not exist already
-    # | num_players | agent | turn | state | action | team |
-    cursor.execute(''' CREATE TABLE IF NOT EXISTS pool_of_states( 
-    num_players INTEGER , agent TEXT, turn INTEGER, state TEXT, action INTEGER, team TEXT)''')
+    raise NotImplementedError
+    # cursor = conn.cursor()
+    # # create table if it does not exist already
+    # # | num_players | agent | turn | state | action | team |
+    # cursor.execute(''' CREATE TABLE IF NOT EXISTS pool_of_states(
+    # num_players INTEGER , agent TEXT, turn INTEGER, state TEXT, action INTEGER, team TEXT)''')
+    # # conn.commit()
+    #
+    # num_players = replay_dictionary.pop('num_players')
+    # team = str(replay_dictionary.pop('team'))
+    # values = []
+    # for agent in replay_dictionary.keys():
+    #     num_transitions = len(replay_dictionary[agent]['turns'])
+    #     for i in range(num_transitions):
+    #         # | num_players | agent | turn | state | action | team |
+    #         row = (num_players,
+    #                agent,
+    #                replay_dictionary[agent]['turns'][i],
+    #                str(replay_dictionary[agent]['states'][i]),
+    #                replay_dictionary[agent]['actions'][i],
+    #                team
+    #                )
+    #         assert type(row[4]) == int, f'action was {row[4]}'
+    #         assert 0 <= row[4] <= 50, f'action was {row[4]}'
+    #         values.append(row)
+    # cursor.executemany('INSERT INTO pool_of_states VALUES (?,?,?,?,?,?)', values)
     # conn.commit()
-
-    num_players = replay_dictionary.pop('num_players')
-    team = str(replay_dictionary.pop('team'))
-    values = []
-    for agent in replay_dictionary.keys():
-        num_transitions = len(replay_dictionary[agent]['turns'])
-        for i in range(num_transitions):
-            # | num_players | agent | turn | state | action | team |
-            row = (num_players,
-                   agent,
-                   replay_dictionary[agent]['turns'][i],
-                   str(replay_dictionary[agent]['states'][i]),
-                   replay_dictionary[agent]['actions'][i],
-                   team
-                   )
-            assert type(row[4]) == int, f'action was {row[4]}'
-            assert 0 <= row[4] <= 50, f'action was {row[4]}'
-            values.append(row)
-    cursor.executemany('INSERT INTO pool_of_states VALUES (?,?,?,?,?,?)', values)
-    conn.commit()
