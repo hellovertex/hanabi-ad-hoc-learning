@@ -244,7 +244,7 @@ def main():
     # todo include num_players to sql query
     num_players = 3
     config = {'players': num_players}
-    target_agent_cls = PiersAgent
+    target_agent_cls = VanDenBerghAgent
     train_eval(config=config,
                target_agent_cls=target_agent_cls)
 
@@ -264,7 +264,9 @@ def test_pickling():
         except Exception as e:
             print(i)
             print(e)
+            break
         if i == 1000:
+            print(i)
             break
 
 DEBUG = False

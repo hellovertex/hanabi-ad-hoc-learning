@@ -78,7 +78,14 @@ def get_plausible_cards(observation, player_offset, hand_index):
   #print(f'card_knowledge = {card_knowledge}')
   #print(f'hand_index = {hand_index}')
   # print(card_knowledge)
-  hidden_card = card_knowledge[hand_index]
+  print(f'card_knowledge = {card_knowledge}')
+  [print(c) for c in observation["card_knowledge"]]
+  # print(f'card_knowledge_obs = {observation["card_knowledge"]}')
+  print(f'hand_index = {hand_index}')
+  try:
+    hidden_card = card_knowledge[hand_index]
+  except Exception as e:
+    exit(1)
   # print(hidden_card)
   plausible_cards = []
   for color_index in range(5):
@@ -277,7 +284,13 @@ class Ruleset():
           return{'action_type': 'DISCARD','card_index':card_index}
 
     for card_index in range(len(observation['observed_hands'][0])):
+      # try:
       plausible_cards = get_plausible_cards(observation,0,card_index)
+      # except Exception as e:
+      #   print(f'failed at card_index = {card_index}')
+      #   print(f'observed hands = {observation["observed_hands"][0]}')
+      #   print(f'observation = {observation}')
+      #   exit(1)
       eventually_playable=False
       for card in plausible_cards:
         color = colors[card.color]
