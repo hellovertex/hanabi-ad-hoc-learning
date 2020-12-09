@@ -20,6 +20,15 @@ from typing import NamedTuple
 import database as db
 
 print(rl_env.__file__)
+
+
+# Agent = namedtuple('Agent', ['name', 'instance'])
+
+class Agent(NamedTuple):
+  name: str
+  instance: ra.RulebasedAgent
+
+
 AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
@@ -28,17 +37,17 @@ COLORS = ['R', 'Y', 'G', 'W', 'B']
 
 
 def to_int(action_dict):
-  # max_moves: 5 x play, 5 x discard, reveal color x 20=5c*4pl, reveal rank x 20=5r*4pl
+  # todo this is wrong. Fix it
   int_action = None
-
   if action_dict['action_type'] == 'PLAY':
     int_action = action_dict['card_index']  # 0-4 slots
   elif action_dict['action_type'] == 'DISCARD':
     int_action = 5 + action_dict['card_index']  # 5-9 slots
   elif action_dict['action_type'] == 'REVEAL_COLOR':
-    # todo this is wrong obviously. Fix it
+    # todo wrong here
     int_action = 10 + COLORS.index(action_dict['color']) * action_dict['target_offset']  # 10-29 slots
   elif action_dict['action_type'] == 'REVEAL_RANK':
+    # todo wrong and here
     int_action = 30 + action_dict['rank'] * action_dict['target_offset']  # 30-49 slots
   return int(int_action)  # convert from 'numpy.int64' to python int
 
@@ -48,11 +57,10 @@ class Runner:
     self.num_players = num_players
     self.environment = rl_env.make('Hanabi-Full', self.num_players)
     self.agent_config = {'players': self.num_players}  # same for all ra.RulebasedAgent instances
-    self.zeros = [0 for _ in range(50)]  # used by one hot encoding action function
 
   @staticmethod
   def _initialize_replay_dict(agents):
-    team = []
+    team = []  # will be a database column containing the team member classnames
     replay_dict = {}
     for agent in agents:
       team.append(agent.name)
@@ -60,7 +68,7 @@ class Runner:
         replay_dict[agent.name] = {'states': [],
                                    'int_actions': [],
                                    'dict_actions': [],
-                                   'turns': [],
+                                   'turns': [],  # integer indicating which turn of the game it is
                                    'obs_dict': []}
       except:
         # goes here if we have more than one copy of the same agent(key)
@@ -70,12 +78,17 @@ class Runner:
   @staticmethod
   def update_replay_dict(replay_dict, agent, observation, current_player_action, drop_actions, agent_index,
                          turn_in_game_i):
-    replay_dict[agent.name]['states'].append(observation['vectorized'] + [int(i) for i in f'{agent_index:03b}'])
     if not drop_actions:
       replay_dict[agent.name]['int_actions'].append(-1)  # to_int_action() currently bugged
       replay_dict[agent.name]['dict_actions'].append(current_player_action)
     replay_dict[agent.name]['turns'].append(turn_in_game_i)
     replay_dict[agent.name]['obs_dict'].append(observation)
+
+    # # only temporarily, 3 bit number indicating the player position
+    # util_encoding = [int(i) for i in f'{agent_index:03b}']
+    # todo remove key 'states', currenyly kept for compatibility
+    replay_dict[agent.name]['states'].append(observation['vectorized'])  # + util_encoding)
+
     return replay_dict
 
   def run(self,
@@ -135,13 +148,6 @@ class Runner:
     return replay_dict, turns_played
 
 
-# Agent = namedtuple('Agent', ['name', 'instance'])
-
-class Agent(NamedTuple):
-  name: str
-  instance: ra.RulebasedAgent
-
-
 class StateActionCollector:
   def __init__(self,
                agent_classes: Dict[str, ra.RulebasedAgent],
@@ -150,7 +156,6 @@ class StateActionCollector:
                ):
     self.agent_classes = agent_classes  # pool of agents used to play
     self.num_players = num_players
-    # self.states = []
     self._target_agent = target_agent
     self.runner = Runner(self.num_players)
     self.initialized_agents = {}  # Dict[str, namedtuple]
@@ -182,8 +187,6 @@ class StateActionCollector:
   actionlist = List
 
   def write_to_database(self, path, replay_dictionary, team, with_obs_dict):
-
-    #        x          x       x      x       x        x
     # | num_players | agent | turn | state | action | team |
     # current_player: 0
     # current_player_offset: 0
@@ -211,7 +214,7 @@ class StateActionCollector:
               target_agent=None,
               games_per_group=1,
               insert_to_database_at: Optional[str] = None,
-              keep_obs_dict=False) -> Tuple[statelist, actionlist]:
+              keep_obs_dict=False) -> Optional[Tuple[statelist, actionlist]]:
     """
     Play Hanabi games to collect states (and maybe actions) until max_states are collected.
 
@@ -230,17 +233,16 @@ class StateActionCollector:
     if agent_id is provided, the states and actions returned correspond only to corresponding agent
     """
     if target_agent:
-      assert target_agent in AGENT_CLASSES.keys(), "Unkown Agent identifier provided"
+      assert target_agent in AGENT_CLASSES.keys(), f"Unkown Agent identifier: {target_agent}"
     num_states = 0
     cum_states = []
     cum_actions = []
+
     # initialize all agents only once, and then pass them over to run function
-    # target_agent_index = self._initialize_all_agents(agent_id)
     self._initialize_all_agents()
     k = self.num_players - bool(target_agent)  # maybe save one spot for target agent
 
     while num_states < max_states:
-
       # play one game with randomly sampled agents
       players = self.get_players(k=k, target_agent=target_agent)
       replay_dictionary, num_turns_played = self.runner.run(players,
@@ -257,21 +259,23 @@ class StateActionCollector:
       # Xor 2. keep data until return
       else:
         for key, val in replay_dictionary.items():
-          if not isinstance(cum_states, np.ndarray):
-            cum_states = np.array(val['states'])
-            cum_actions = np.array(val['actions'])
-          else:
-            try:
-              cum_states = np.concatenate((cum_states, val['states']))
-              cum_actions = np.concatenate((cum_actions, val['actions']))
-            except ValueError as e:
-              # goes here if states or actions are empty
-              # (because we dropped actions or the corresponding agent didnt make any moves)
-
-              # print(e)
-              # print(cum_states, cum_actions, agents, num_states)
-              # exit(1)
-              pass
+          # todo update or maybe remove this part
+          raise NotImplementedError
+          # if not isinstance(cum_states, np.ndarray):
+          #   cum_states = np.array(val['states'])
+          #   cum_actions = np.array(val['actions'])
+          # else:
+          #   try:
+          #     cum_states = np.concatenate((cum_states, val['states']))
+          #     cum_actions = np.concatenate((cum_actions, val['actions']))
+          #   except ValueError as e:
+          #     # goes here if states or actions are empty
+          #     # (because we dropped actions or the corresponding agent didnt make any moves)
+          #
+          #     # print(e)
+          #     # print(cum_states, cum_actions, agents, num_states)
+          #     # exit(1)
+          #     pass
       # cumulated stats
       num_states += num_turns_played
 
