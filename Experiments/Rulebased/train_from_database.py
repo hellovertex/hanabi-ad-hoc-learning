@@ -20,29 +20,6 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
 
-class QueryColumns(enum.IntEnum):
-  """ Columns sorted according to database layout """
-  # todo remove this
-  num_players = 0
-  agent = 1
-  turn = 2
-  int_action = 3
-  dict_action = 4
-  team = 5
-  current_player = 6
-  current_player_offset = 7
-  deck_size = 8
-  discard_pile = 9
-  fireworks = 10
-  information_tokens = 11
-  legal_moves = 12
-  life_tokens = 13
-  observed_hands = 14
-  card_knowledge = 15
-  vectorized = 16
-  pyhanabi = 17
-
-
 class PoolOfStates(torch.utils.data.IterableDataset):
   def __init__(self, from_db_path='./database.db',
                load_state_as_type='dict',  # or 'dict'
@@ -61,7 +38,7 @@ class PoolOfStates(torch.utils.data.IterableDataset):
     self._load_lazily = load_lazily
     assert load_state_as_type in ['torch.FloatTensor', 'dict'], 'states must be either torch.FloatTensor or dict'
     self._load_state_as_type = load_state_as_type
-    self.query_vars = ['num_players',
+    self.QUERY_VARS = ['num_players',
                         'agent',
                         'current_player',
                         'current_player_offset',
@@ -72,37 +49,76 @@ class PoolOfStates(torch.utils.data.IterableDataset):
                         'legal_moves',
                         'life_tokens',
                         'observed_hands',
-                        'card_knowledge',
-                        'vectorized',
-                        'pyhanabi']
-    actions = [] if self._drop_actions else ['int_action', 'dict_action ']
-    self.query_vars += actions
+                       'card_knowledge',
+                       'vectorized',
+                       'pyhanabi']
+    actions = [] if drop_actions else ['int_action', 'dict_action ']
+    self.QUERY_VARS += actions
 
-  @staticmethod
-  def _build_query(query_columns: list, table='pool_of_state_dicts') -> str:
-    query_cols = [col+ ', ' for col in query_columns]
+  class QueryCols(enum.IntEnum):
+    num_players = 0
+    agent = 1
+    current_player = 2
+    current_player_offset = 3
+    deck_size = 4
+    discard_pile = 5
+    fireworks = 6
+    information_tokens = 7
+    legal_moves = 8
+    life_tokens = 9
+    observed_hands = 10
+    card_knowledge = 11
+    vectorized = 12
+    pyhanabi = 13
+    int_action = 14
+    dict_action = 15
+
+  def _build_query(self, table='pool_of_state_dicts') -> str:
+    query_cols = [col + ', ' for col in self.QUERY_VARS]
     query_cols[-1] = query_cols[-1][:-2]  # remove last ,
     query_string = ['SELECT '] + query_cols + ['from ' + table]
     return "".join(query_string)
 
+  def _parse_row_to_dict(self, row):
+    obs_dict = {}
+    # assign columns of query to corresponding key in observation_dict
+    obs_dict[self.QueryCols.num_players.name] = row[self.QueryCols.num_players.value]
+    obs_dict[self.QueryCols.agent.name] = row[self.QueryCols.agent.value]
+    obs_dict[self.QueryCols.current_player.name] = row[self.QueryCols.current_player.value]
+    obs_dict[self.QueryCols.current_player_offset.name] = row[self.QueryCols.current_player_offset.value]
+    obs_dict[self.QueryCols.deck_size.name] = row[self.QueryCols.deck_size.value]
+    obs_dict[self.QueryCols.discard_pile.name] = eval(row[self.QueryCols.discard_pile.value])
+    obs_dict[self.QueryCols.fireworks.name] = eval(row[self.QueryCols.fireworks.value])
+    obs_dict[self.QueryCols.information_tokens.name] = row[self.QueryCols.information_tokens.value]
+    obs_dict[self.QueryCols.legal_moves.name] = eval(row[self.QueryCols.legal_moves.value])
+    obs_dict[self.QueryCols.life_tokens.name] = row[self.QueryCols.life_tokens.value]
+    obs_dict[self.QueryCols.observed_hands.name] = eval(row[self.QueryCols.observed_hands.value])
+    obs_dict[self.QueryCols.card_knowledge.name] = eval(row[self.QueryCols.card_knowledge.value])
+    obs_dict[self.QueryCols.vectorized.name] = eval(row[self.QueryCols.vectorized.value])
+    obs_dict[self.QueryCols.pyhanabi.name] = pickle.loads(row[self.QueryCols.pyhanabi.value])
+    if not self._drop_actions:
+      obs_dict[self.QueryCols.int_action.name] = row[self.QueryCols.int_action.value]
+      obs_dict[self.QueryCols.dict_action.name] = row[self.QueryCols.dict_action.value]
+
+    return obs_dict
+
   def _yield_dict(self):
     cursor = self._connection.cursor()
-    obs_dict = {}
-    query_string = self._build_query(self.query_vars)
+    query_string = self._build_query()
     # query database with all the information necessary to build the observation_dictionary
     cursor.execute(query_string)
     # parse query
     for row in cursor:  # database row
-      for i, var in enumerate(self.query_vars):  # assign columns of query to corresponding key in observation_dict
-        obs_dict[var] = row[i]
+      # build observation_dict from row
+      obs_dict = self._parse_row_to_dict(row)
       # yield row by row the observation_dictionary unpacked from that row
       yield obs_dict
 
   def get_rows_lazily(self):
-    if self._load_state_as_type == 'torch.FloatTensor':
-      raise NotImplementedError
-    elif self._load_state_as_type == 'dict':
+    if self._load_state_as_type == 'dict':
       return self._yield_dict()
+    elif self._load_state_as_type == 'torch.FloatTensor':
+      raise NotImplementedError
     else:
       raise NotImplementedError
 
@@ -135,30 +151,6 @@ def update_model(*args):
   pass
 
 
-def int_action_to_dict(int_action):
-  card_index = -1
-  target_offset = -1
-  action_type = None
-  color = -1
-  rank = -1
-  if 0 <= int_action <= 4:
-    action_type = 'PLAY'
-  elif 5 <= int_action <= 9:
-    action_type = 'DISCARD'
-  elif 10 <= int_action <= 29:
-    action_type = 'REVEAL_COLOR'
-  elif 30 <= int_action <= 49:
-    action_type = 'REVEAL_RANK'
-  if action_type == 'REVEAL_COLOR':
-    color = int_action % 10
-    target_offset = int(int_action / 10)
-  elif action_type == 'REVEAL_RANK':
-    rank = int_action % 10
-    target_offset = int(int_action / 10) - 2
-  return {'action_type': action_type, 'card_index': card_index, 'target_offset': target_offset, 'color': color,
-          'rank': rank}
-
-
 def train_eval_test(config,
                     target_agent_cls,
                     from_db_path='./database_test.db',
@@ -180,9 +172,7 @@ def train_eval_test(config,
       action = target_agent.act(state)
       if state['agent'] in str(target_agent_cls):
         print(f'action agent took online was {action}')
-        print(f'int action in database = {state["int_action"]}')
         print(f'Dict action in database = {state["dict_action"]}')
-        # print(f'converted int action =  {int_action_to_dict(state["int_action"])}')
         print(state['agent'])
 
         break
