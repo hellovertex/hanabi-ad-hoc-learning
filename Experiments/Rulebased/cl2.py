@@ -65,11 +65,15 @@ class Runner:
     for agent in agents:
       team.append(agent.name)
       try:
+        # used when writing to database
         replay_dict[agent.name] = {  # 'states': [],
                                    'int_actions': [],
                                    'dict_actions': [],
                                    'turns': [],  # integer indicating which turn of the game it is
                                    'obs_dict': []}
+        # used in online collection mode, e.g. when evaluating a NN
+        replay_dict['states'] = []
+        replay_dict['actions'] = []
       except:
         # goes here if we have more than one copy of the same agent(key)
         pass
@@ -82,18 +86,18 @@ class Runner:
                          current_player_action,
                          drop_actions,
                          agent_index,
-                         turn_in_game_i):
-    # todo compare pyhanabi hands and card_knowledge for sanity
-    if not drop_actions:
-      replay_dict[agent.name]['int_actions'].append(-1)  # to_int_action() currently bugged
-      replay_dict[agent.name]['dict_actions'].append(current_player_action)
-    replay_dict[agent.name]['turns'].append(turn_in_game_i)
-    replay_dict[agent.name]['obs_dict'].append(observation)
-
-    # # only temporarily, 3 bit number indicating the player position
-    # util_encoding = [int(i) for i in f'{agent_index:03b}']
-    # todo remove key 'states', currenyly kept for compatibility
-    # replay_dict[agent.name]['states'].append(observation['vectorized'])  # + util_encoding)
+                         turn_in_game_i,
+                         keep_obs_dict=True):
+    if keep_obs_dict:  # more information is saved, when intending to write to database
+      replay_dict[agent.name]['turns'].append(turn_in_game_i)
+      replay_dict[agent.name]['obs_dict'].append(observation)
+      if not drop_actions:
+        replay_dict[agent.name]['int_actions'].append(-1)  # to_int_action() currently bugged
+        replay_dict[agent.name]['dict_actions'].append(current_player_action)
+    else:  # less information is saved, when in online collection mode
+      replay_dict['states'].append(observation['vectorized'])
+      if not drop_actions:
+        replay_dict['actions'].append(current_player_action)
 
     return replay_dict
 
@@ -102,13 +106,16 @@ class Runner:
           max_games=1,
           target_agent: Optional[str] = None,
           drop_actions=False,
-          keep_obs_dict=False):
+          keep_obs_dict=False,
+          ):
     """
     agents: Agent instances used to play game
     max_games: number of games to collect at maximum
     agent_target: if provided, only state-action pairs for corresponding agent are returned
     drop_actions: if True, only states will be returned without corresponding actions
     keep_obs_dict: If true, returned replay_dict will also contain the observation_dict
+    mode: If mode=='database' replay dictionary will have complete information,
+    If mode=='online', only vectorized states/actions will be stored in replay dict
     """
 
     def _is_target_agent(agent):
@@ -140,7 +147,8 @@ class Runner:
                                                     current_player_action=current_player_action,
                                                     drop_actions=drop_actions,
                                                     agent_index=agent_index,
-                                                    turn_in_game_i=turn_in_game_i)
+                                                    turn_in_game_i=turn_in_game_i,
+                                                    keep_obs_dict=keep_obs_dict)
               turns_played += 1
               turn_in_game_i += 1
           else:
@@ -207,6 +215,10 @@ class StateActionCollector:
     # vectorized:
     # pyhanabi
 
+    if not with_obs_dict:
+      # later we may implement smaller databases, where we drop the observation dictionary
+      raise NotImplementedError("Database layout requires observation dictionary")
+
     # creates database at path, if it does not exist already
     conn = db.create_connection(path)
     # if table exists, appends dictionary data, otherwise it creates the table first and then inserts
@@ -220,23 +232,17 @@ class StateActionCollector:
               target_agent=None,
               games_per_group=1,
               insert_to_database_at: Optional[str] = None,
-              keep_obs_dict=False) -> Optional[Tuple[statelist, actionlist]]:
+              keep_obs_dict=True) -> Optional[Tuple[statelist, actionlist]]:
     """
     Play Hanabi games to collect states (and maybe actions) until max_states are collected.
 
     If insert_to_database_at is provided, states and actions will be stored there (if valid path).
-    Otherwise, numpy representations are returned as Tuple[List[List], List[List]], to be used
+    Otherwise, numpy representations are returned as Tuple[List[List], List], to be used
     as training data for NN training.
 
-    To minimize bias,
-    self.num_players are sampled uniformly from self.agent_classes
-    for each game.
+    To minimize bias, players are sampled uniformly from self.agent_classes for each game.
 
-    This way, the set of states will be more heterogeneous, e.g. some come from
-    later states in the game, some have different hinted cards, etc. depending on the
-    agents used to play.
-
-    if target_agent is provided, the states and actions returned belong only to corresponding agent
+    If target_agent is provided, the states and actions returned belong only to corresponding agent.
     """
     if target_agent:
       assert target_agent in AGENT_CLASSES.keys(), f"Unkown Agent identifier: {target_agent}"
@@ -264,24 +270,20 @@ class StateActionCollector:
                                with_obs_dict=keep_obs_dict)
       # Xor 2. keep data until return
       else:
-        for key, val in replay_dictionary.items():
-          # todo update or maybe remove this part
-          raise NotImplementedError
-          # if not isinstance(cum_states, np.ndarray):
-          #   cum_states = np.array(val['states'])
-          #   cum_actions = np.array(val['actions'])
-          # else:
-          #   try:
-          #     cum_states = np.concatenate((cum_states, val['states']))
-          #     cum_actions = np.concatenate((cum_actions, val['actions']))
-          #   except ValueError as e:
-          #     # goes here if states or actions are empty
-          #     # (because we dropped actions or the corresponding agent didnt make any moves)
-          #
-          #     # print(e)
-          #     # print(cum_states, cum_actions, agents, num_states)
-          #     # exit(1)
-          #     pass
+        if not isinstance(cum_states, np.ndarray):
+          cum_states = np.array(replay_dictionary['states'])
+          cum_actions = np.array(replay_dictionary['actions'])  # may be empty, depending on drop_actions
+        else:
+          try:
+            cum_states = np.concatenate((cum_states, replay_dictionary['states']))
+            cum_actions = np.concatenate((cum_actions, replay_dictionary['actions']))  # may be empty
+          except ValueError as e:
+            # goes here if states or actions are empty
+            # (because we dropped actions or the corresponding agent didnt make any moves)
+            # print(e)
+            # print(cum_states, cum_actions, num_states)
+            # exit(1)
+            pass
       # cumulated stats
       num_states += num_turns_played
 
@@ -289,4 +291,7 @@ class StateActionCollector:
       # return random subset of cum_states, cum_actions
       max_len = len(cum_states)
       indices = [random.randint(0, max_len - 1) for _ in range(max_states)]
-      return cum_states[indices], cum_actions[indices]
+      if drop_actions:
+        return cum_states[indices]
+      else:
+        return cum_states[indices], cum_actions[indices]

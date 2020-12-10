@@ -77,7 +77,7 @@ class PoolOfStates(torch.utils.data.IterableDataset):
 
   def _build_query(self, table='pool_of_state_dicts') -> str:
     query_cols = [col + ', ' for col in self.QUERY_VARS]
-    query_cols[-1] = query_cols[-1][:-2]  # remove last ,
+    query_cols[-1] = query_cols[-1][:-2]  # remove last ', '
     query_string = ['SELECT '] + query_cols + ['from ' + table]
     return "".join(query_string)
 
