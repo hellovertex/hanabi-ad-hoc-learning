@@ -67,10 +67,10 @@ class Runner:
       try:
         # used when writing to database
         replay_dict[agent.name] = {  # 'states': [],
-                                   'int_actions': [],
-                                   'dict_actions': [],
-                                   'turns': [],  # integer indicating which turn of the game it is
-                                   'obs_dict': []}
+          'int_actions': [],
+          'dict_actions': [],
+          'turns': [],  # integer indicating which turn of the game it is
+          'obs_dict': []}
         # used in online collection mode, e.g. when evaluating a NN, otherwise remains empty
         replay_dict['states'] = []
         replay_dict['actions'] = []
@@ -94,6 +94,7 @@ class Runner:
       if not drop_actions:
         replay_dict[agent.name]['int_actions'].append(-1)  # to_int_action() currently bugged
         replay_dict[agent.name]['dict_actions'].append(current_player_action)
+
     else:  # less information is saved, e.g. when in online collection mode
       replay_dict['states'].append(observation['vectorized'])
       if not drop_actions:
@@ -232,7 +233,7 @@ class StateActionCollector:
               target_agent=None,
               games_per_group=1,
               insert_to_database_at: Optional[str] = None,
-              keep_obs_dict=True) -> Optional[Tuple[statelist, actionlist]]:
+              keep_obs_dict=True):  # -> Optional[Tuple[statelist, actionlist]]:
     """
     Play Hanabi games to collect states (and maybe actions) until max_states are collected.
 
@@ -271,7 +272,7 @@ class StateActionCollector:
       # Xor 2. keep data until return
       else:
         # todo write function for this block
-        if not isinstance(cum_states, np.ndarray):
+        if not isinstance(cum_states, torch.FloatTensor):
           cum_states = np.array(replay_dictionary['states'])
           cum_actions = np.array(replay_dictionary['actions'])  # may be empty, depending on drop_actions
         else:
@@ -293,6 +294,9 @@ class StateActionCollector:
       max_len = len(cum_states)
       indices = [random.randint(0, max_len - 1) for _ in range(max_states)]
       if drop_actions:
-        return cum_states[indices]
+        # return cum_states[indices]
+        return torch.from_numpy(cum_states[indices]).type(torch.FloatTensor)
       else:
-        return cum_states[indices], cum_actions[indices]
+        # return cum_states[indices], cum_actions[indices]
+        return torch.from_numpy(cum_states[indices]).type(torch.FloatTensor), torch.from_numpy(
+          cum_actions[indices]).type(torch.FloatTensor)
