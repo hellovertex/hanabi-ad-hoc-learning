@@ -18,6 +18,8 @@ import enum
 import model
 import torch.optim as optim
 from cl2 import AGENT_CLASSES
+
+
 # AGENT_CLASSES = {'InternalAgent': InternalAgent,
 #                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
 #                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
@@ -139,48 +141,6 @@ class PoolOfStatesFromDatabase(torch.utils.data.IterableDataset):
       raise NotImplementedError
 
 
-class PoolOfStatesOnline(torch.utils.data.IterableDataset):
-  pass
-
-dataset = PoolOfStatesFromDatabase(drop_actions=True)
-dataloader = DataLoader(dataset, batch_size=None)
-
-
-def train_eval_test(config,
-                    target_agent_cls,
-                    from_db_path='./database_test.db',
-                    target_table='pool_of_states'):
-  # pool of states
-  # todo consider using ray to centralize dataloading to avoid racing for database
-  dataset = PoolOfStatesFromDatabase(from_db_path=from_db_path, batch_size=1, drop_actions=True, load_state_as_type='dict')
-  dataloader = DataLoader(dataset, batch_size=None)
-
-  target_agent = target_agent_cls(config)
-  # model = Model(config)
-  i = 0
-  for state in dataloader:
-    try:
-      # state = state[0]
-      # print(state)
-      print(i)
-      i += 1
-      action = target_agent.act(state)
-      test(net=None, target_agent=target_agent, num_states=10)
-      print(state['agent'] in str(target_agent_cls))
-      if state['agent'] in str(target_agent_cls):
-        print(f'action agent took online was {action}')
-        print(f'Dict action in database = {state["dict_action"]}')
-        print(state['agent'])
-
-        break
-    except Exception as e:
-      print(type(e), e, i)
-      traceback.print_exc()
-      break
-
-    # predicted = model(state)
-    # update_model(action, predicted)
-
 def collect(num_states_to_collect):
   collector = StateActionCollector(AGENT_CLASSES, 3)
   states = collector.collect(drop_actions=False,
@@ -190,15 +150,17 @@ def collect(num_states_to_collect):
                              keep_agent=False)
   return states
 
+
 hand_size = 5
 num_players = 3
 num_colors = 5
 num_ranks = 5
 COLORS = ['R', 'Y', 'G', 'W', 'B']
 COLORS_INV = ['B', 'W', 'G', 'Y', 'R']
-RANKS_INV = [4,3,2,1,0]
-color_offset = (2*hand_size)
-rank_offset = color_offset + (num_players-1) * num_colors
+RANKS_INV = [4, 3, 2, 1, 0]
+color_offset = (2 * hand_size)
+rank_offset = color_offset + (num_players - 1) * num_colors
+
 
 def to_int(action_dict):
   action_type = action_dict['action_type']
@@ -213,49 +175,58 @@ def to_int(action_dict):
   else:
     raise ValueError(f'action_dict was {action_dict}')
 
-def test(net, target_agent, num_states):
+
+def test(net, criterion, target_agent, num_states):
   # load pickled observations and get vectorized and compute action and eval with that
   observations_pickled = collect(num_states)
-  accuracy = 0
-  loss = 0
-  for obs in observations_pickled:
-    observation = pickle.loads(obs)
-    action_dict = target_agent.act(observation)
-    vectorized = observation['vectorized']
-    # prediction = net(vectorized)
-    action = to_int(action_dict)
+  correct = 0
+  running_loss = 0
+  with torch.no_grad():
+    for obs in observations_pickled:
+      observation = pickle.loads(obs)
+      action = torch.LongTensor([to_int(target_agent.act(observation))])
+      prediction = net(torch.FloatTensor(observation['vectorized'])).reshape(1, -1)
+      # loss
+      running_loss += criterion(prediction, action)
+      # accuracy
+      correct += torch.max(prediction, 1)[1] == action
+    return 100*running_loss/num_states, 100*correct.item()/num_states
 
-    # prediction == action
-    # print(f'action was {action_dict}')
-    # print(f'int_action was {action}')
 
-
-    # todo compute loss and accuracy
-    break
 
 def train_eval(config,
                target_agent_cls,
                from_db_path='./database_test.db',
-               target_table='pool_of_states'):
+               target_table='pool_of_states',
+               log_interval=100,
+               eval_interval=1000):
 
-  trainset = PoolOfStatesFromDatabase(from_db_path=from_db_path, batch_size=1, drop_actions=False, load_state_as_type='dict')
+  trainset = PoolOfStatesFromDatabase(from_db_path=from_db_path, batch_size=1, drop_actions=False,
+                                      load_state_as_type='dict')
   trainloader = DataLoader(trainset, batch_size=None)
-  testset = PoolOfStatesOnline()
+
   target_agent = target_agent_cls(config)
   net = model.get_model(observation_size=956, num_actions=30, num_hidden_layers=1, layer_size=512)
   criterion = torch.nn.CrossEntropyLoss()
   optimizer = optim.Adam(net.parameters(), lr=0.001)
+  it = 0
+
   for state in trainloader:
     observation = state[0]
     action = target_agent.act(observation)
-    # action = parse to torch.Tensor
-    vectorized = observation['vectorized']
+    action = torch.LongTensor([to_int(action)])
+    vectorized = torch.FloatTensor(observation['vectorized'])
     optimizer.zero_grad()
-    outputs = net(vectorized)
+    outputs = net(vectorized).reshape(1, -1)
     loss = criterion(outputs, action)
     loss.backward()
     optimizer.step()
-    # todo write 1. eval 2. ray 3. tensorboard
+    if it % log_interval == 0:
+      print(f'Iteration {it}...')
+    if it % eval_interval == 0:
+      loss, acc = test(net=net, criterion=criterion, target_agent=target_agent, num_states=100)
+      print(f'Loss at iteration {it} is {loss}, and accuracy is {acc} %')
+    it += 1
 
 
 def main():
@@ -263,33 +234,8 @@ def main():
   num_players = 3
   config = {'players': num_players}
   target_agent_cls = VanDenBerghAgent
-  train_eval_test(config=config, target_agent_cls=target_agent_cls)
+  train_eval(config=config, target_agent_cls=target_agent_cls)
 
 
-def test_pickling():
-  conn = sqlite3.connect('./database_test.db')
-  cursor = conn.cursor()
-  cursor.execute('SELECT pyhanabi from pool_of_state_dicts')
-  i = 0
-  for row in cursor:
-    # print(row)
-    try:
-      pyhanabi = pickle.loads(row[0])
-      print(pyhanabi)
-      print('pyhanabi')
-      i += 1
-    except Exception as e:
-      print(i)
-      print(e)
-      break
-    if i == 1000:
-      print(i)
-      break
-
-
-DEBUG = False
 if __name__ == '__main__':
-  if DEBUG:
-    test_pickling()
-  else:
-    main()
+  main()

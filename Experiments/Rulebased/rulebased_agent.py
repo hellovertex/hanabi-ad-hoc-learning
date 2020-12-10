@@ -15,7 +15,7 @@
 
 from hanabi_learning_environment.rl_env import Agent
 from ruleset import Ruleset
-
+import traceback
 
 class RulebasedAgent():
   """Agent that applies a simple heuristic."""
@@ -26,17 +26,23 @@ class RulebasedAgent():
     self.histogram = [0 for i in range(len(rules)+1)]
 
   def get_move(self,observation):
-    if observation['current_player_offset'] == 0:
-      for index, rule in enumerate(self.rules):
-        action = rule(observation)
-        if action is not None:
-          # print(rule)
-          self.histogram[index]+=1
-          self.totalCalls +=1
-          return action
-      self.histogram[-1]+=1
-      self.totalCalls +=1
-      return Ruleset.legal_random(observation)
+    try:
+      if observation['current_player_offset'] == 0:
+        for index, rule in enumerate(self.rules):
+          action = rule(observation)
+          if action is not None:
+            # print(rule)
+            self.histogram[index]+=1
+            self.totalCalls +=1
+            return action
+        self.histogram[-1]+=1
+        self.totalCalls +=1
+        return Ruleset.legal_random(observation)
+    except Exception as e:
+      print(e)
+      traceback.print_exc()
+      print(observation)
+      exit(1)
     return None
  
   def print_histogram(self):
