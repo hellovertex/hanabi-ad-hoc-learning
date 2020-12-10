@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 import pickle
 # project lvl imports
 import rulebased_agent as ra
+from Experiments.Rulebased.cl2 import StateActionCollector
 from internal_agent import InternalAgent
 from outer_agent import OuterAgent
 from iggi_agent import IGGIAgent
@@ -16,13 +17,13 @@ import traceback
 import enum
 import model
 import torch.optim as optim
+from cl2 import AGENT_CLASSES
+# AGENT_CLASSES = {'InternalAgent': InternalAgent,
+#                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
+#                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
-AGENT_CLASSES = {'InternalAgent': InternalAgent,
-                 'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
-                 'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
-
-class PoolOfStates(torch.utils.data.IterableDataset):
+class PoolOfStatesFromDatabase(torch.utils.data.IterableDataset):
   def __init__(self, from_db_path='./database.db',
                load_state_as_type='dict',  # or 'dict'
                drop_actions=False,
@@ -30,7 +31,7 @@ class PoolOfStates(torch.utils.data.IterableDataset):
                target_table='pool_of_states',
                batch_size=1,
                load_lazily=True):
-    super(PoolOfStates).__init__()
+    super(PoolOfStatesFromDatabase).__init__()
     self._from_db_path = from_db_path  # path to .db file
     self._drop_actions = drop_actions
     self._size = size
@@ -79,7 +80,7 @@ class PoolOfStates(torch.utils.data.IterableDataset):
   def _build_query(self, table='pool_of_state_dicts') -> str:
     query_cols = [col + ', ' for col in self.QUERY_VARS]
     query_cols[-1] = query_cols[-1][:-2]  # remove last ', '
-    query_string = ['SELECT '] + query_cols + ['from ' + table]
+    query_string = ['SELECT '] + query_cols + [' from ' + table]
     return "".join(query_string)
 
   def _parse_row_to_dict(self, row):
@@ -133,17 +134,16 @@ class PoolOfStates(torch.utils.data.IterableDataset):
     if self._load_lazily:
       return iter(self._create_batch([self.get_rows_lazily() for _ in range(self._batch_size)]))
     else:
-      # todo here, we could load greedily to distribute a large dataset via ray
+      # todo here, we could load eagerly to distribute a large dataset via ray
       # maybe this will speed up the process by removing the dataloading bottleneck on the workers
       raise NotImplementedError
 
 
-dataset = PoolOfStates(drop_actions=True)
-dataloader = DataLoader(dataset, batch_size=None)
-
-
-def eval():
+class PoolOfStatesOnline(torch.utils.data.IterableDataset):
   pass
+
+dataset = PoolOfStatesFromDatabase(drop_actions=True)
+dataloader = DataLoader(dataset, batch_size=None)
 
 
 def train_eval_test(config,
@@ -152,7 +152,7 @@ def train_eval_test(config,
                     target_table='pool_of_states'):
   # pool of states
   # todo consider using ray to centralize dataloading to avoid racing for database
-  dataset = PoolOfStates(from_db_path=from_db_path, batch_size=1, drop_actions=False, load_state_as_type='dict')
+  dataset = PoolOfStatesFromDatabase(from_db_path=from_db_path, batch_size=1, drop_actions=True, load_state_as_type='dict')
   dataloader = DataLoader(dataset, batch_size=None)
 
   target_agent = target_agent_cls(config)
@@ -160,11 +160,13 @@ def train_eval_test(config,
   i = 0
   for state in dataloader:
     try:
-      state = state[0]
+      # state = state[0]
       # print(state)
       print(i)
       i += 1
       action = target_agent.act(state)
+      test(net=None, target_agent=target_agent, num_states=10)
+      print(state['agent'] in str(target_agent_cls))
       if state['agent'] in str(target_agent_cls):
         print(f'action agent took online was {action}')
         print(f'Dict action in database = {state["dict_action"]}')
@@ -179,20 +181,71 @@ def train_eval_test(config,
     # predicted = model(state)
     # update_model(action, predicted)
 
+def collect(num_states_to_collect):
+  collector = StateActionCollector(AGENT_CLASSES, 3)
+  states = collector.collect(drop_actions=False,
+                             max_states=num_states_to_collect,
+                             target_agent=None,
+                             keep_obs_dict=True,
+                             keep_agent=False)
+  return states
+
+hand_size = 5
+num_players = 3
+num_colors = 5
+num_ranks = 5
+COLORS = ['R', 'Y', 'G', 'W', 'B']
+COLORS_INV = ['B', 'W', 'G', 'Y', 'R']
+RANKS_INV = [4,3,2,1,0]
+color_offset = (2*hand_size)
+rank_offset = color_offset + (num_players-1) * num_colors
+
+def to_int(action_dict):
+  action_type = action_dict['action_type']
+  if action_type == 'DISCARD':
+    return action_dict['card_index']
+  elif action_type == 'PLAY':
+    return hand_size + action_dict['card_index']
+  elif action_type == 'REVEAL_COLOR':
+    return color_offset + action_dict['target_offset'] * num_colors - (COLORS_INV.index(action_dict['color'])) - 1
+  elif action_type == 'REVEAL_RANK':
+    return rank_offset + action_dict['target_offset'] * num_ranks - (RANKS_INV[action_dict['rank']]) - 1
+  else:
+    raise ValueError(f'action_dict was {action_dict}')
+
+def test(net, target_agent, num_states):
+  # load pickled observations and get vectorized and compute action and eval with that
+  observations_pickled = collect(num_states)
+  accuracy = 0
+  loss = 0
+  for obs in observations_pickled:
+    observation = pickle.loads(obs)
+    action_dict = target_agent.act(observation)
+    vectorized = observation['vectorized']
+    # prediction = net(vectorized)
+    action = to_int(action_dict)
+
+    # prediction == action
+    # print(f'action was {action_dict}')
+    # print(f'int_action was {action}')
+
+
+    # todo compute loss and accuracy
+    break
 
 def train_eval(config,
                target_agent_cls,
                from_db_path='./database_test.db',
                target_table='pool_of_states'):
-  # todo use ray to centralize dataloading
-  dataset = PoolOfStates(from_db_path=from_db_path, batch_size=1, drop_actions=False, load_state_as_type='dict')
-  dataloader = DataLoader(dataset, batch_size=None)
 
+  trainset = PoolOfStatesFromDatabase(from_db_path=from_db_path, batch_size=1, drop_actions=False, load_state_as_type='dict')
+  trainloader = DataLoader(trainset, batch_size=None)
+  testset = PoolOfStatesOnline()
   target_agent = target_agent_cls(config)
   net = model.get_model(observation_size=956, num_actions=30, num_hidden_layers=1, layer_size=512)
   criterion = torch.nn.CrossEntropyLoss()
   optimizer = optim.Adam(net.parameters(), lr=0.001)
-  for state in dataloader:
+  for state in trainloader:
     observation = state[0]
     action = target_agent.act(observation)
     # action = parse to torch.Tensor

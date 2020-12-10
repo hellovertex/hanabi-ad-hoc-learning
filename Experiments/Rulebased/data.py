@@ -14,9 +14,9 @@ from flawed_agent import FlawedAgent
 from piers_agent import PiersAgent
 from van_den_bergh_agent import VanDenBerghAgent
 
-AGENT_CLASSES = {'InternalAgent': InternalAgent,
-                 'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
-                 'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
+# AGENT_CLASSES = {'InternalAgent': InternalAgent,
+#                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
+#                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
 
 class IterableStatesCollection(torch.utils.data.IterableDataset):
@@ -95,10 +95,22 @@ def write(path_to_db, num_rows_to_add, use_state_dict=False):
 
 def collect(num_states_to_collect):
     collector = StateActionCollector(AGENT_CLASSES, 3)
-    states = collector.collect(drop_actions=True,
+    states = collector.collect(drop_actions=False,
                                max_states=num_states_to_collect,
                                target_agent=None,
-                               keep_obs_dict=False)
+                               keep_obs_dict=True,
+                               keep_agent=False)
     return states
 # write(path_to_db='./database_test.db', num_rows_to_add=500, use_state_dict=True)
-print(collect(100))
+# # too slow, seconds taken increase linearly with number of states
+# start = time()
+# print(collect(1e2), f'took {time() - start} seconds')
+# start = time()
+# print(collect(1e3), f'took {time() - start} seconds')
+# start = time()
+# print(collect(1e4), f'took {time() - start} seconds')
+start = time()
+print(collect(1e2), f'took {time() - start} seconds')
+# print(f'took {time() - start} seconds')
+# print(type(data))
+# print(type(data['obs_dicts']))

@@ -70,10 +70,11 @@ class Runner:
           'int_actions': [],
           'dict_actions': [],
           'turns': [],  # integer indicating which turn of the game it is
-          'obs_dict': []}
+          'obs_dicts': []}
         # used in online collection mode, e.g. when evaluating a NN, otherwise remains empty
         replay_dict['states'] = []
         replay_dict['actions'] = []
+        replay_dict['obs_dicts'] = []
       except:
         # goes here if we have more than one copy of the same agent(key)
         pass
@@ -87,13 +88,18 @@ class Runner:
                          drop_actions,
                          agent_index,
                          turn_in_game_i,
-                         keep_obs_dict=True):
+                         keep_obs_dict=True,
+                         keep_agent=True):
     if keep_obs_dict:  # more information is saved, when intending to write to database
-      replay_dict[agent.name]['turns'].append(turn_in_game_i)
-      replay_dict[agent.name]['obs_dict'].append(observation)
-      if not drop_actions:
-        replay_dict[agent.name]['int_actions'].append(-1)  # to_int_action() currently bugged
-        replay_dict[agent.name]['dict_actions'].append(current_player_action)
+      observation = pickle.dumps(observation, pickle.HIGHEST_PROTOCOL)
+      if keep_agent:
+        replay_dict[agent.name]['turns'].append(turn_in_game_i)
+        replay_dict[agent.name]['obs_dicts'].append(observation)
+        if not drop_actions:
+          replay_dict[agent.name]['int_actions'].append(-1)  # to_int_action() currently bugged
+          replay_dict[agent.name]['dict_actions'].append(current_player_action)
+      else:
+        replay_dict['obs_dicts'].append(observation)
 
     else:  # less information is saved, e.g. when in online collection mode
       replay_dict['states'].append(observation['vectorized'])
@@ -108,6 +114,7 @@ class Runner:
           target_agent: Optional[str] = None,
           drop_actions=False,
           keep_obs_dict=False,
+          keep_agent=True
           ):
     """
     agents: Agent instances used to play game
@@ -149,7 +156,8 @@ class Runner:
                                                     drop_actions=drop_actions,
                                                     agent_index=agent_index,
                                                     turn_in_game_i=turn_in_game_i,
-                                                    keep_obs_dict=keep_obs_dict)
+                                                    keep_obs_dict=keep_obs_dict,
+                                                    keep_agent=keep_agent)
               turns_played += 1
               turn_in_game_i += 1
           else:
@@ -227,13 +235,71 @@ class StateActionCollector:
     replay_dictionary['num_players'] = self.num_players
     db.insert_data(conn, replay_dictionary, with_obs_dict)
 
+  @staticmethod
+  def _accumulate_states_maybe_actions(source, target):
+    """ Assumes target has keys 'states' and 'actions' """
+    if not isinstance(target['states'], torch.FloatTensor):
+      target['states'] = np.array(source['states'])
+      target['actions'] = np.array(source['actions'])  # may be empty, depending on drop_actions
+    else:
+      target['states'] = np.concatenate((target['states'], source['states']))
+      try:
+        target['actions'] = np.concatenate((target['actions'], source['actions']))  # may be empty
+      except ValueError as e:
+        # goes here if states or actions are empty
+        # (because we dropped actions or the corresponding agent didnt make any moves)
+        # print(e)
+        # print(cum_states, cum_actions, num_states)
+        # exit(1)
+        pass
+    return target
+
+  @staticmethod
+  def _accumulate_obs_dicts(source, target, keep_agent):
+    """ Assumes target has key 'obs_dicts' """
+    if keep_agent:
+      raise NotImplementedError("Currently, keeping the agent together with eager return is not implement")
+    target['obs_dicts'] += source['obs_dicts']
+    return target
+
+  def _accumulate_for_eager_return(self, source, target, keep_agent, keep_obs_dict=True):
+    if not keep_obs_dict:
+      return self._accumulate_states_maybe_actions(source=source, target=target)
+    else:
+      return self._accumulate_obs_dicts(source=source, target=target, keep_agent=keep_agent)
+
+  @staticmethod
+  def _unpack_obs_dicts(eager_return_values):
+    # currently the only key is ['obs_dicts]
+    return eager_return_values['obs_dicts']
+
+  @staticmethod
+  def _unpack_states_actions(eager_return_values, max_states, drop_actions):
+    # return random subset of cum_states, cum_actions
+    max_len = len(eager_return_values['states'])
+    indices = [random.randint(0, max_len - 1) for _ in range(int(max_states))]
+    if drop_actions:
+      # return cum_states[indices]
+      return torch.from_numpy(eager_return_values['states'][indices]).type(torch.FloatTensor)
+    else:
+      # return cum_states[indices], cum_actions[indices]
+      return torch.from_numpy(
+        eager_return_values['states'][indices]).type(torch.FloatTensor), eager_return_values['actions'][indices]
+
+  def _formatted_eager_return_values(self, eager_return_values, max_states, keep_obs_dict, drop_actions):
+    if keep_obs_dict:
+      return self._unpack_obs_dicts(eager_return_values)
+    else:
+      return self._unpack_states_actions(eager_return_values, max_states, drop_actions)
+
   def collect(self,
               drop_actions=False,
               max_states=1000,
               target_agent=None,
               games_per_group=1,
               insert_to_database_at: Optional[str] = None,
-              keep_obs_dict=True):  # -> Optional[Tuple[statelist, actionlist]]:
+              keep_obs_dict=True,
+              keep_agent=True):  # -> Optional[Tuple[statelist, actionlist]]:
     """
     Play Hanabi games to collect states (and maybe actions) until max_states are collected.
 
@@ -247,22 +313,22 @@ class StateActionCollector:
     """
     if target_agent:
       assert target_agent in AGENT_CLASSES.keys(), f"Unkown Agent identifier: {target_agent}"
-    num_states = 0
-    cum_states = []
-    cum_actions = []
+    num_states_collected = 0
 
+    eager_return_values = {'states': [], 'actions': [], 'obs_dicts': []}
     # initialize all agents only once, and then pass them over to run function
     self._initialize_all_agents()
     k = self.num_players - bool(target_agent)  # maybe save one spot for target agent
 
-    while num_states < max_states:
+    while num_states_collected < max_states:
       # play one game with randomly sampled agents
       players = self._get_players(k=k, target_agent=target_agent)
       replay_dictionary, num_turns_played = self.runner.run(players,
                                                             max_games=games_per_group,
                                                             target_agent=target_agent,
                                                             drop_actions=drop_actions,
-                                                            keep_obs_dict=keep_obs_dict)
+                                                            keep_obs_dict=keep_obs_dict,
+                                                            keep_agent=keep_agent)
       # 1. write to database
       if insert_to_database_at:
         self.write_to_database(path=insert_to_database_at,
@@ -271,32 +337,17 @@ class StateActionCollector:
                                with_obs_dict=keep_obs_dict)
       # Xor 2. keep data until return
       else:
-        # todo write function for this block
-        if not isinstance(cum_states, torch.FloatTensor):
-          cum_states = np.array(replay_dictionary['states'])
-          cum_actions = np.array(replay_dictionary['actions'])  # may be empty, depending on drop_actions
-        else:
-          try:
-            cum_states = np.concatenate((cum_states, replay_dictionary['states']))
-            cum_actions = np.concatenate((cum_actions, replay_dictionary['actions']))  # may be empty
-          except ValueError as e:
-            # goes here if states or actions are empty
-            # (because we dropped actions or the corresponding agent didnt make any moves)
-            # print(e)
-            # print(cum_states, cum_actions, num_states)
-            # exit(1)
-            pass
+        eager_return_values = self._accumulate_for_eager_return(source=replay_dictionary,
+                                                                target=eager_return_values,
+                                                                keep_agent=keep_agent,
+                                                                keep_obs_dict=True)
+
       # cumulated stats
-      num_states += num_turns_played
+      num_states_collected += num_turns_played
 
     if not insert_to_database_at:
-      # return random subset of cum_states, cum_actions
-      max_len = len(cum_states)
-      indices = [random.randint(0, max_len - 1) for _ in range(max_states)]
-      if drop_actions:
-        # return cum_states[indices]
-        return torch.from_numpy(cum_states[indices]).type(torch.FloatTensor)
-      else:
-        # return cum_states[indices], cum_actions[indices]
-        return torch.from_numpy(cum_states[indices]).type(torch.FloatTensor), torch.from_numpy(
-          cum_actions[indices]).type(torch.FloatTensor)
+      return self._formatted_eager_return_values(eager_return_values=eager_return_values,
+                                                 max_states=max_states,
+                                                 keep_obs_dict=keep_obs_dict,
+                                                 drop_actions=drop_actions)
+

@@ -80,7 +80,7 @@ def insert_state_dict_data(conn, replay_dictionary):
         for i in range(num_transitions):
             # | num_players | agent | turn | state | action | team |
             # obs = replay_dictionary[agent]['obs_dict'][i]
-            obs_pyhanabi = replay_dictionary[agent]['obs_dict'][i]['pyhanabi']
+            obs_pyhanabi = replay_dictionary[agent]['obs_dicts'][i]['pyhanabi']
             pyhanabi = pickle.dumps(obs_pyhanabi, pickle.HIGHEST_PROTOCOL)
 
             row = (num_players,
@@ -90,17 +90,17 @@ def insert_state_dict_data(conn, replay_dictionary):
                    str(replay_dictionary[agent]['dict_actions'][i]),
                    team,
                    # parse observation_dictionary
-                   replay_dictionary[agent]['obs_dict'][i]['current_player'],
-                   replay_dictionary[agent]['obs_dict'][i]['current_player_offset'],
-                   replay_dictionary[agent]['obs_dict'][i]['deck_size'],
-                   str(replay_dictionary[agent]['obs_dict'][i]['discard_pile']),
-                   str(replay_dictionary[agent]['obs_dict'][i]['fireworks']),
-                   replay_dictionary[agent]['obs_dict'][i]['information_tokens'],
-                   str(replay_dictionary[agent]['obs_dict'][i]['legal_moves']),
-                   replay_dictionary[agent]['obs_dict'][i]['life_tokens'],
-                   str(replay_dictionary[agent]['obs_dict'][i]['observed_hands']),
-                   str(replay_dictionary[agent]['obs_dict'][i]['card_knowledge']),
-                   str(replay_dictionary[agent]['obs_dict'][i]['vectorized']),
+                   replay_dictionary[agent]['obs_dicts'][i]['current_player'],
+                   replay_dictionary[agent]['obs_dicts'][i]['current_player_offset'],
+                   replay_dictionary[agent]['obs_dicts'][i]['deck_size'],
+                   str(replay_dictionary[agent]['obs_dicts'][i]['discard_pile']),
+                   str(replay_dictionary[agent]['obs_dicts'][i]['fireworks']),
+                   replay_dictionary[agent]['obs_dicts'][i]['information_tokens'],
+                   str(replay_dictionary[agent]['obs_dicts'][i]['legal_moves']),
+                   replay_dictionary[agent]['obs_dicts'][i]['life_tokens'],
+                   str(replay_dictionary[agent]['obs_dicts'][i]['observed_hands']),
+                   str(replay_dictionary[agent]['obs_dicts'][i]['card_knowledge']),
+                   str(replay_dictionary[agent]['obs_dicts'][i]['vectorized']),
                    # sqlite3.Binary(b'pyhanabi_goes_here')  # sqlite3.Binary(pyhanabi)
                    sqlite3.Binary(pyhanabi)
                    )
