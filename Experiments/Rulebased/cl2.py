@@ -21,7 +21,8 @@ import database as db
 
 print(rl_env.__file__)
 
-
+# todo: filter for keys of observation that will get pickled, so that database is not too big
+# todo: move dict_to_int(action) function from training to collection (here)
 # Agent = namedtuple('Agent', ['name', 'instance'])
 
 class Agent(NamedTuple):

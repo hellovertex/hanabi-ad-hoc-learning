@@ -1,3 +1,5 @@
+from functools import partial
+
 import torch
 import sqlite3
 import numpy as np
@@ -18,19 +20,46 @@ import enum
 import model
 import torch.optim as optim
 from cl2 import AGENT_CLASSES
-
+import ray
+from ray import tune
+from ray.tune.schedulers import ASHAScheduler
+from ray.tune import CLIReporter
+import os
 
 # AGENT_CLASSES = {'InternalAgent': InternalAgent,
 #                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
 #                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
+hand_size = 5
+num_players = 3
+num_colors = 5
+num_ranks = 5
+COLORS = ['R', 'Y', 'G', 'W', 'B']
+COLORS_INV = ['B', 'W', 'G', 'Y', 'R']
+RANKS_INV = [4, 3, 2, 1, 0]
+color_offset = (2 * hand_size)
+rank_offset = color_offset + (num_players - 1) * num_colors
+
+
+def to_int(action_dict):
+  action_type = action_dict['action_type']
+  if action_type == 'DISCARD':
+    return action_dict['card_index']
+  elif action_type == 'PLAY':
+    return hand_size + action_dict['card_index']
+  elif action_type == 'REVEAL_COLOR':
+    return color_offset + action_dict['target_offset'] * num_colors - (COLORS_INV.index(action_dict['color'])) - 1
+  elif action_type == 'REVEAL_RANK':
+    return rank_offset + action_dict['target_offset'] * num_ranks - (RANKS_INV[action_dict['rank']]) - 1
+  else:
+    raise ValueError(f'action_dict was {action_dict}')
 
 
 class PoolOfStatesFromDatabase(torch.utils.data.IterableDataset):
-  def __init__(self, from_db_path='./database.db',
+  def __init__(self, from_db_path='./database_test.db',
                load_state_as_type='dict',  # or 'dict'
                drop_actions=False,
                size=1e5,
-               target_table='pool_of_states',
+               target_table='pool_of_state_dicts',
                batch_size=1,
                load_lazily=True):
     super(PoolOfStatesFromDatabase).__init__()
@@ -151,31 +180,6 @@ def collect(num_states_to_collect):
   return states
 
 
-hand_size = 5
-num_players = 3
-num_colors = 5
-num_ranks = 5
-COLORS = ['R', 'Y', 'G', 'W', 'B']
-COLORS_INV = ['B', 'W', 'G', 'Y', 'R']
-RANKS_INV = [4, 3, 2, 1, 0]
-color_offset = (2 * hand_size)
-rank_offset = color_offset + (num_players - 1) * num_colors
-
-
-def to_int(action_dict):
-  action_type = action_dict['action_type']
-  if action_type == 'DISCARD':
-    return action_dict['card_index']
-  elif action_type == 'PLAY':
-    return hand_size + action_dict['card_index']
-  elif action_type == 'REVEAL_COLOR':
-    return color_offset + action_dict['target_offset'] * num_colors - (COLORS_INV.index(action_dict['color'])) - 1
-  elif action_type == 'REVEAL_RANK':
-    return rank_offset + action_dict['target_offset'] * num_ranks - (RANKS_INV[action_dict['rank']]) - 1
-  else:
-    raise ValueError(f'action_dict was {action_dict}')
-
-
 def test(net, criterion, target_agent, num_states):
   # load pickled observations and get vectorized and compute action and eval with that
   observations_pickled = collect(num_states)
@@ -193,22 +197,36 @@ def test(net, criterion, target_agent, num_states):
     return 100*running_loss/num_states, 100*correct.item()/num_states
 
 
-
 def train_eval(config,
-               target_agent_cls,
+               conn=None,
+               checkpoint_dir=None,
                from_db_path='./database_test.db',
-               target_table='pool_of_states',
+               target_table='pool_of_state_dicts',
                log_interval=100,
-               eval_interval=1000):
+               eval_interval=1000,
+               num_eval_states=100,
+               break_at_iteration=np.inf,
+               use_ray=True):
+  target_agent_cls = config['agent']
+  lr = config['lr']
+  num_hidden_layers = config['num_hidden_layers']
+  layer_size = config['layer_size']
+  batch_size = config['batch_size']
+  num_players = config['num_players']
 
-  trainset = PoolOfStatesFromDatabase(from_db_path=from_db_path, batch_size=1, drop_actions=False,
+  trainset = PoolOfStatesFromDatabase(from_db_path=from_db_path,
+                                      batch_size=batch_size,
+                                      drop_actions=True,
                                       load_state_as_type='dict')
   trainloader = DataLoader(trainset, batch_size=None)
 
-  target_agent = target_agent_cls(config)
-  net = model.get_model(observation_size=956, num_actions=30, num_hidden_layers=1, layer_size=512)
+  target_agent = target_agent_cls(config['agent_config'])
+  net = model.get_model(observation_size=956,  # todo derive this from game_config
+                        num_actions=30,
+                        num_hidden_layers=num_hidden_layers,
+                        layer_size=layer_size)
   criterion = torch.nn.CrossEntropyLoss()
-  optimizer = optim.Adam(net.parameters(), lr=0.001)
+  optimizer = optim.Adam(net.parameters(), lr=lr)
   it = 0
 
   for state in trainloader:
@@ -221,20 +239,80 @@ def train_eval(config,
     loss = criterion(outputs, action)
     loss.backward()
     optimizer.step()
-    if it % log_interval == 0:
+
+    if it % log_interval == 0 and not use_ray:
       print(f'Iteration {it}...')
     if it % eval_interval == 0:
       loss, acc = test(net=net, criterion=criterion, target_agent=target_agent, num_states=100)
-      print(f'Loss at iteration {it} is {loss}, and accuracy is {acc} %')
+      if not use_ray:
+        print(f'Loss at iteration {it} is {loss}, and accuracy is {acc} %')
+      else:
+        tune.report(loss=loss, acc=acc)
+        with tune.checkpoint_dir(step=it) as checkpoint_dir:
+          path = os.path.join(checkpoint_dir, 'checkpoint')
+          torch.save((net.state_dict, optimizer.state_dict), path)
     it += 1
+    if it > break_at_iteration:
+      break
 
-
+DEBUG=True
+USE_RAY=True
 def main():
   # todo include num_players to sql query
   num_players = 3
-  config = {'players': num_players}
-  target_agent_cls = VanDenBerghAgent
-  train_eval(config=config, target_agent_cls=target_agent_cls)
+  search_space = {'agent': tune.choice(AGENT_CLASSES.values()),
+                  'lr': tune.loguniform(1e-4, 1e-1),
+                  'num_hidden_layers': tune.grid_search([1, 2]),
+                  'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
+                  'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
+                  'num_players': num_players,
+                  'agent_config': {'players': num_players}
+                  }
+  config = {'agent': FlawedAgent,
+                  'lr': 1e-2,
+                  'num_hidden_layers': 1,
+                  'layer_size': 256,
+                  'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
+                  'num_players': num_players,
+                  'agent_config': {'players': num_players}
+                  }
+  # conn = sqlite3.connect('./database_test.db')
+  if DEBUG:
+    log_interval=10
+    eval_interval=20
+    num_eval_states=100
+  else:
+    # train_fn = partial(train_eval, conn, use_ray=False)
+    log_interval = 100
+    eval_interval = 1000
+    num_eval_states = 100
+
+  if USE_RAY:
+    analysis = tune.run(partial(train_eval,
+                                from_db_path='/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db',
+                                target_table='pool_of_state_dicts',
+                                log_interval=log_interval,
+                                eval_interval=eval_interval,
+                                num_eval_states=num_eval_states),
+                        config=search_space,
+                        num_samples=32,
+                        scheduler=ASHAScheduler(metric="loss", mode="min", max_t=1e7),
+                        progress_reporter=CLIReporter(metric_columns=["loss", "acc", "training_iteration"]))
+    best_trial = analysis.get_best_trial("acc", "max")
+    print(best_trial.config)
+  else:
+    train_eval(config,
+             conn=None,
+             checkpoint_dir=None,
+             from_db_path='./database_test.db',
+             target_table='pool_of_state_dicts',
+             log_interval=log_interval,
+             eval_interval=eval_interval,
+             num_eval_states=num_eval_states,
+             break_at_iteration=np.inf,
+             use_ray=False)
+
+
 
 
 if __name__ == '__main__':

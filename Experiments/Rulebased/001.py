@@ -109,11 +109,11 @@ DEBUG = True
 
 
 def main():
-    search_space = {'agent': 'FlawedAgent',
+    search_space = {'agent': tune.choice(AGENT_CLASSES.values()),
               'lr': tune.loguniform(1e-4, 1e-1),
               'num_hidden_layers': tune.grid_search([1, 2]),
               'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
-              'batch_size': tune.choice([4, 8, 16, 32]),
+              'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
               'num_players': 3,
               }
     config = {'agent': 'FlawedAgent',
