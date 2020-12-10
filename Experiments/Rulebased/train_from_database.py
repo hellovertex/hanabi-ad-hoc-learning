@@ -16,6 +16,7 @@ import traceback
 import enum
 import model
 import torch.optim as optim
+
 AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
@@ -141,6 +142,9 @@ dataset = PoolOfStates(drop_actions=True)
 dataloader = DataLoader(dataset, batch_size=None)
 
 
+def eval():
+  pass
+
 
 def train_eval_test(config,
                     target_agent_cls,
@@ -198,6 +202,8 @@ def train_eval(config,
     loss = criterion(outputs, action)
     loss.backward()
     optimizer.step()
+    # todo write 1. eval 2. ray 3. tensorboard
+
 
 def main():
   # todo include num_players to sql query

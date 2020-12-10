@@ -71,7 +71,7 @@ class Runner:
                                    'dict_actions': [],
                                    'turns': [],  # integer indicating which turn of the game it is
                                    'obs_dict': []}
-        # used in online collection mode, e.g. when evaluating a NN
+        # used in online collection mode, e.g. when evaluating a NN, otherwise remains empty
         replay_dict['states'] = []
         replay_dict['actions'] = []
       except:
@@ -94,7 +94,7 @@ class Runner:
       if not drop_actions:
         replay_dict[agent.name]['int_actions'].append(-1)  # to_int_action() currently bugged
         replay_dict[agent.name]['dict_actions'].append(current_player_action)
-    else:  # less information is saved, when in online collection mode
+    else:  # less information is saved, e.g. when in online collection mode
       replay_dict['states'].append(observation['vectorized'])
       if not drop_actions:
         replay_dict['actions'].append(current_player_action)
@@ -270,6 +270,7 @@ class StateActionCollector:
                                with_obs_dict=keep_obs_dict)
       # Xor 2. keep data until return
       else:
+        # todo write function for this block
         if not isinstance(cum_states, np.ndarray):
           cum_states = np.array(replay_dictionary['states'])
           cum_actions = np.array(replay_dictionary['actions'])  # may be empty, depending on drop_actions
