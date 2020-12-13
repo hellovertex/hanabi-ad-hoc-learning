@@ -26,9 +26,9 @@ from ray.tune.schedulers import ASHAScheduler
 from ray.tune import CLIReporter
 import os
 
-# AGENT_CLASSES = {'InternalAgent': InternalAgent,
-#                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
-#                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
+AGENT_CLASSES = {'InternalAgent': InternalAgent,
+                 'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
+                 'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 hand_size = 5
 num_players = 3
 num_colors = 5
@@ -52,6 +52,14 @@ def to_int(action_dict):
     return rank_offset + action_dict['target_offset'] * num_ranks - (RANKS_INV[action_dict['rank']]) - 1
   else:
     raise ValueError(f'action_dict was {action_dict}')
+
+class AccuracyStopper(ray.tune.Stopper):
+  def __init__(self):
+    pass
+  def __call__(self, *args, **kwargs):
+    return False
+  def stop_all(self):
+    pass
 
 
 class PoolOfStatesFromDatabase(torch.utils.data.IterableDataset):
@@ -243,11 +251,12 @@ def train_eval(config,
     if it % log_interval == 0 and not use_ray:
       print(f'Iteration {it}...')
     if it % eval_interval == 0:
-      loss, acc = test(net=net, criterion=criterion, target_agent=target_agent, num_states=100)
+      loss, acc = test(net=net, criterion=criterion, target_agent=target_agent, num_states=num_eval_states)
       if not use_ray:
         print(f'Loss at iteration {it} is {loss}, and accuracy is {acc} %')
       else:
         tune.report(loss=loss, acc=acc)
+        # checkpoint frequency may be handled by ray if we remove checkpointing here
         with tune.checkpoint_dir(step=it) as checkpoint_dir:
           path = os.path.join(checkpoint_dir, 'checkpoint')
           torch.save((net.state_dict, optimizer.state_dict), path)
@@ -260,7 +269,7 @@ USE_RAY=True
 def main():
   # todo include num_players to sql query
   num_players = 3
-  search_space = {'agent': tune.choice(AGENT_CLASSES.values()),
+  search_space = {'agent': AGENT_CLASSES['VanDenBerghAgent'],  # tune.choice(AGENT_CLASSES.values()),
                   'lr': tune.loguniform(1e-4, 1e-1),
                   'num_hidden_layers': tune.grid_search([1, 2]),
                   'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
@@ -281,23 +290,31 @@ def main():
     log_interval=10
     eval_interval=20
     num_eval_states=100
+    num_samples = 32
   else:
     # train_fn = partial(train_eval, conn, use_ray=False)
     log_interval = 100
     eval_interval = 1000
-    num_eval_states = 100
+    num_eval_states = 500
 
   if USE_RAY:
+    keep_checkpoints_num = 50
+    verbose=1
     analysis = tune.run(partial(train_eval,
                                 from_db_path='/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db',
                                 target_table='pool_of_state_dicts',
                                 log_interval=log_interval,
                                 eval_interval=eval_interval,
-                                num_eval_states=num_eval_states),
+                                num_eval_states=num_eval_states
+                                ),
                         config=search_space,
-                        num_samples=32,
+                        num_samples=num_samples,
+                        keep_checkpoints_num=keep_checkpoints_num,
+                        verbose=verbose,
+                        stop=ray.tune.EarlyStopping(metric='acc', mode='max'),
                         scheduler=ASHAScheduler(metric="loss", mode="min", max_t=1e7),
-                        progress_reporter=CLIReporter(metric_columns=["loss", "acc", "training_iteration"]))
+                        progress_reporter=CLIReporter(metric_columns=["loss", "acc", "training_iteration"])
+                        )
     best_trial = analysis.get_best_trial("acc", "max")
     print(best_trial.config)
   else:
