@@ -220,7 +220,7 @@ def test(net, criterion, target_agent, num_states):
 def train_eval(config,
                conn=None,
                checkpoint_dir=None,
-               from_db_path='./database_test.db',
+               from_db_path=None,
                target_table='pool_of_state_dicts',
                log_interval=100,
                eval_interval=1000,
@@ -233,7 +233,8 @@ def train_eval(config,
   layer_size = config['layer_size']
   batch_size = config['batch_size']
   num_players = config['num_players']
-
+  if from_db_path is None:
+    raise NotImplementedError("Todo: Implement the database setup before training on new machines. ")
   trainset = PoolOfStatesFromDatabase(from_db_path=from_db_path,
                                       batch_size=batch_size,
                                       drop_actions=True,
