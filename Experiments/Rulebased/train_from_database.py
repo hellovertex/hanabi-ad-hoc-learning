@@ -284,7 +284,8 @@ USE_RAY = True
 def main():
   # todo include num_players to sql query
   num_players = 3
-  search_space = {'agent': AGENT_CLASSES['VanDenBerghAgent'],  # tune.choice(AGENT_CLASSES.values()),
+  agentname = 'VanDenBerghAgent'
+  search_space = {'agent': AGENT_CLASSES[agentname],  # tune.choice(AGENT_CLASSES.values()),
                   'lr': tune.loguniform(1e-4, 1e-1),
                   'num_hidden_layers': tune.grid_search([1, 2]),
                   'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
@@ -314,7 +315,7 @@ def main():
   if USE_RAY:
     keep_checkpoints_num = 50
     verbose = 1
-    num_samples = 1
+    num_samples = 10  # amounts to 160 trials, i.e. learning rate is sampled 10 times for each value in the [2x8] grid
     from_db_path_notebook = '/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
     from_db_path_desktop = '/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
     analysis = tune.run(partial(train_eval,
@@ -325,6 +326,7 @@ def main():
                                 num_eval_states=num_eval_states
                                 ),
                         config=search_space,
+                        name=agentname,
                         num_samples=num_samples,
                         keep_checkpoints_num=keep_checkpoints_num,
                         verbose=verbose,
