@@ -268,7 +268,7 @@ def train_eval(config,
       if not use_ray:
         print(f'Loss at iteration {it} is {loss}, and accuracy is {acc} %')
       else:
-        tune.report(loss=loss, acc=acc)
+        tune.report(training_iteration=it, loss=loss, acc=acc)
         # checkpoint frequency may be handled by ray if we remove checkpointing here
         with tune.checkpoint_dir(step=it) as checkpoint_dir:
           path = os.path.join(checkpoint_dir, 'checkpoint')
@@ -288,7 +288,7 @@ def main():
   agentname = 'VanDenBerghAgent'
   search_space = {'agent': AGENT_CLASSES[agentname],  # tune.choice(AGENT_CLASSES.values()),
                   'lr': tune.loguniform(1e-4, 1e-1),
-                  'num_hidden_layers': tune.grid_search([1, 2]),
+                  'num_hidden_layers': 1,  # tune.grid_search([1, 2]),
                   'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
                   'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
                   'num_players': num_players,
@@ -316,28 +316,39 @@ def main():
   if USE_RAY:
     keep_checkpoints_num = 50
     verbose = 1
-    num_samples = 10  # amounts to 160 trials, i.e. learning rate is sampled 10 times for each value in the [2x8] grid
+    num_samples = 10
     from_db_path_notebook = '/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
     from_db_path_desktop = '/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
-    analysis = tune.run(partial(train_eval,
-                                from_db_path=from_db_path_notebook,
+
+    train_fn = partial(train_eval,
+                                from_db_path=from_db_path_desktop,
                                 target_table='pool_of_state_dicts',
                                 log_interval=log_interval,
                                 eval_interval=eval_interval,
                                 num_eval_states=num_eval_states
-                                ),
+                                )
+    scheduler = ASHAScheduler(time_attr='training_iteration',
+                              # metric="acc",
+                              grace_period=int(1e3),
+                              # mode="max",
+                              max_t=int(1e7))
+    pbt = None
+    analysis = tune.run(train_fn,
+                        metric='acc',
+                        mode='max',
                         config=search_space,
                         name=agentname,
                         num_samples=num_samples,
                         keep_checkpoints_num=keep_checkpoints_num,
                         verbose=verbose,
-                        # stop=ray.tune.EarlyStopping(metric='acc', top=5, patience=1, mode='max'),
-                        scheduler=ASHAScheduler(metric="loss", mode="min", max_t=1e7),
+                        # stopipp=ray.tune.EarlyStopping(metric='acc', top=5, patience=1, mode='max'),
+                        scheduler=scheduler,
                         progress_reporter=CLIReporter(metric_columns=["loss", "acc", "training_iteration"]),
                         # trial_dirname_creator=trial_dirname_creator_fn
                         )
     best_trial = analysis.get_best_trial("acc", "max")
     print(best_trial.config)
+    print(analysis.best_dataframe['acc'])
   else:
     train_eval(config,
                conn=None,
