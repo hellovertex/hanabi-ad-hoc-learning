@@ -53,11 +53,23 @@ def to_int(action_dict):
   else:
     raise ValueError(f'action_dict was {action_dict}')
 
+
+def trial_dirname_creator_fn(trial):
+  config = trial.config
+  agent = config['agent']
+  return 'players=' + str(config['num_players']) + '_agent=' + str(config['agent']) + '_hidden_layers=' + str(
+    config['num_hidden_layers']) + '_hidden_size=' + str(config['layer_size']) + '_lr=' + str(
+    config['lr']) + '_batch_size=' + str(config['batch_size'])
+
+
+
 class AccuracyStopper(ray.tune.Stopper):
   def __init__(self):
     pass
+
   def __call__(self, *args, **kwargs):
     return False
+
   def stop_all(self):
     pass
 
@@ -202,7 +214,7 @@ def test(net, criterion, target_agent, num_states):
       running_loss += criterion(prediction, action)
       # accuracy
       correct += torch.max(prediction, 1)[1] == action
-    return 100*running_loss/num_states, 100*correct.item()/num_states
+    return 100 * running_loss / num_states, 100 * correct.item() / num_states
 
 
 def train_eval(config,
@@ -264,8 +276,11 @@ def train_eval(config,
     if it > break_at_iteration:
       break
 
-DEBUG=True
-USE_RAY=True
+
+DEBUG = True
+USE_RAY = True
+
+
 def main():
   # todo include num_players to sql query
   num_players = 3
@@ -278,19 +293,18 @@ def main():
                   'agent_config': {'players': num_players}
                   }
   config = {'agent': FlawedAgent,
-                  'lr': 1e-2,
-                  'num_hidden_layers': 1,
-                  'layer_size': 256,
-                  'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
-                  'num_players': num_players,
-                  'agent_config': {'players': num_players}
-                  }
+            'lr': 1e-2,
+            'num_hidden_layers': 1,
+            'layer_size': 256,
+            'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
+            'num_players': num_players,
+            'agent_config': {'players': num_players}
+            }
   # conn = sqlite3.connect('./database_test.db')
   if DEBUG:
-    log_interval=10
-    eval_interval=20
-    num_eval_states=100
-    num_samples = 32
+    log_interval = 10
+    eval_interval = 20
+    num_eval_states = 100
   else:
     # train_fn = partial(train_eval, conn, use_ray=False)
     log_interval = 100
@@ -299,7 +313,8 @@ def main():
 
   if USE_RAY:
     keep_checkpoints_num = 50
-    verbose=1
+    verbose = 1
+    num_samples = 1
     analysis = tune.run(partial(train_eval,
                                 from_db_path='/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db',
                                 target_table='pool_of_state_dicts',
@@ -311,25 +326,24 @@ def main():
                         num_samples=num_samples,
                         keep_checkpoints_num=keep_checkpoints_num,
                         verbose=verbose,
-                        stop=ray.tune.EarlyStopping(metric='acc', mode='max'),
+                        # stop=ray.tune.EarlyStopping(metric='acc', top=5, patience=1, mode='max'),
                         scheduler=ASHAScheduler(metric="loss", mode="min", max_t=1e7),
-                        progress_reporter=CLIReporter(metric_columns=["loss", "acc", "training_iteration"])
+                        progress_reporter=CLIReporter(metric_columns=["loss", "acc", "training_iteration"]),
+                        # trial_dirname_creator=trial_dirname_creator_fn
                         )
     best_trial = analysis.get_best_trial("acc", "max")
     print(best_trial.config)
   else:
     train_eval(config,
-             conn=None,
-             checkpoint_dir=None,
-             from_db_path='./database_test.db',
-             target_table='pool_of_state_dicts',
-             log_interval=log_interval,
-             eval_interval=eval_interval,
-             num_eval_states=num_eval_states,
-             break_at_iteration=np.inf,
-             use_ray=False)
-
-
+               conn=None,
+               checkpoint_dir=None,
+               from_db_path='./database_test.db',
+               target_table='pool_of_state_dicts',
+               log_interval=log_interval,
+               eval_interval=eval_interval,
+               num_eval_states=num_eval_states,
+               break_at_iteration=np.inf,
+               use_ray=False)
 
 
 if __name__ == '__main__':

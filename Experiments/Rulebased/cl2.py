@@ -90,9 +90,13 @@ class Runner:
                          agent_index,
                          turn_in_game_i,
                          keep_obs_dict=True,
-                         keep_agent=True):
-    if keep_obs_dict:  # more information is saved, when intending to write to database
+                         keep_agent=True,
+                         pickle_pyhanabi=True):
+    if pickle_pyhanabi:
       observation = pickle.dumps(observation, pickle.HIGHEST_PROTOCOL)
+
+    if keep_obs_dict:  # more information is saved, when intending to write to database
+
       if keep_agent:
         replay_dict[agent.name]['turns'].append(turn_in_game_i)
         replay_dict[agent.name]['obs_dicts'].append(observation)
@@ -115,7 +119,8 @@ class Runner:
           target_agent: Optional[str] = None,
           drop_actions=False,
           keep_obs_dict=False,
-          keep_agent=True
+          keep_agent=True,
+          pickle_pyhanabi=True
           ):
     """
     agents: Agent instances used to play game
@@ -158,7 +163,8 @@ class Runner:
                                                     agent_index=agent_index,
                                                     turn_in_game_i=turn_in_game_i,
                                                     keep_obs_dict=keep_obs_dict,
-                                                    keep_agent=keep_agent)
+                                                    keep_agent=keep_agent,
+                                                    pickle_pyhanabi=pickle_pyhanabi)
               turns_played += 1
               turn_in_game_i += 1
           else:
@@ -320,6 +326,7 @@ class StateActionCollector:
     # initialize all agents only once, and then pass them over to run function
     self._initialize_all_agents()
     k = self.num_players - bool(target_agent)  # maybe save one spot for target agent
+    pickle_pyhanabi=False if insert_to_database_at else True
 
     while num_states_collected < max_states:
       # play one game with randomly sampled agents
@@ -329,7 +336,8 @@ class StateActionCollector:
                                                             target_agent=target_agent,
                                                             drop_actions=drop_actions,
                                                             keep_obs_dict=keep_obs_dict,
-                                                            keep_agent=keep_agent)
+                                                            keep_agent=keep_agent,
+                                                            pickle_pyhanabi=pickle_pyhanabi)
       # 1. write to database
       if insert_to_database_at:
         self.write_to_database(path=insert_to_database_at,

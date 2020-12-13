@@ -76,11 +76,15 @@ def insert_state_dict_data(conn, replay_dictionary):
     team = str(replay_dictionary.pop('team'))
     values = []
     for agent in replay_dictionary.keys():
+      if agent not in ['states', 'actions', 'obs_dicts']:
         num_transitions = len(replay_dictionary[agent]['turns'])
+
         for i in range(num_transitions):
             # | num_players | agent | turn | state | action | team |
             # obs = replay_dictionary[agent]['obs_dict'][i]
+            # pyhanabi = replay_dictionary[agent]['obs_dicts'][i]
             obs_pyhanabi = replay_dictionary[agent]['obs_dicts'][i]['pyhanabi']
+            # pyhanabi = replay_dictionary[agent]['obs_dicts'][i]['pyhanabi']
             pyhanabi = pickle.dumps(obs_pyhanabi, pickle.HIGHEST_PROTOCOL)
 
             row = (num_players,
