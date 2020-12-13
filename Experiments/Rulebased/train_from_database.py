@@ -315,8 +315,10 @@ def main():
     keep_checkpoints_num = 50
     verbose = 1
     num_samples = 1
+    from_db_path_notebook = '/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
+    from_db_path_desktop = '/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
     analysis = tune.run(partial(train_eval,
-                                from_db_path='/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db',
+                                from_db_path=from_db_path_notebook,
                                 target_table='pool_of_state_dicts',
                                 log_interval=log_interval,
                                 eval_interval=eval_interval,
