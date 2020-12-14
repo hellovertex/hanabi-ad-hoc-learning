@@ -62,7 +62,6 @@ def trial_dirname_creator_fn(trial):
     config['lr']) + '_batch_size=' + str(config['batch_size'])
 
 
-
 class AccuracyStopper(ray.tune.Stopper):
   def __init__(self):
     pass
@@ -287,7 +286,7 @@ def main():
   num_players = 3
   agentname = 'VanDenBerghAgent'
   search_space = {'agent': AGENT_CLASSES[agentname],  # tune.choice(AGENT_CLASSES.values()),
-                  'lr': tune.loguniform(1e-4, 1e-1),
+                  'lr': tune.loguniform(1e-4, 1e-1),  # learning rate seems to be best in [2e-3, 4e-3]
                   'num_hidden_layers': 1,  # tune.grid_search([1, 2]),
                   'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
                   'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
@@ -331,7 +330,7 @@ def main():
                               # metric="acc",
                               grace_period=int(1e3),
                               # mode="max",
-                              max_t=int(1e7))
+                              max_t=int(257e3))  # current implementation raises stop iteration when db is finished
     pbt = None
     analysis = tune.run(train_fn,
                         metric='acc',
