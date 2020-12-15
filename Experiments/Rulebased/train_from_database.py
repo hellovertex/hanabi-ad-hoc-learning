@@ -25,6 +25,7 @@ from ray import tune
 from ray.tune.schedulers import ASHAScheduler
 from ray.tune import CLIReporter
 import os
+from time import time
 
 AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
@@ -36,7 +37,7 @@ if DEBUG:
   EVAL_INTERVAL = 20
   NUM_EVAL_STATES = 500
   # for model selection
-  GRACE_PERIOD=1
+  GRACE_PERIOD = 1
   MAX_T = 100
 else:
   LOG_INTERVAL = 100
@@ -193,14 +194,12 @@ class PoolOfStatesFromDatabase(torch.utils.data.IterableDataset):
       raise NotImplementedError
 
 
-statecollector = StateActionCollector(AGENT_CLASSES, 3)
-
-
-def eval_fn(net, criterion, target_agent, num_states):
+def eval_fn(net, eval_loader, criterion, target_agent, num_states):
   # load pickled observations and get vectorized and compute action and eval with that
-  observations_pickled = statecollector.collect(num_states_to_collect=num_states,
-                                                keep_obs_dict=True,
-                                                keep_agent=False)
+  start = time()
+  observations_pickled = eval_loader.collect(num_states_to_collect=num_states,
+                                             keep_obs_dict=True,
+                                             keep_agent=False)
   correct = 0
   running_loss = 0
   with torch.no_grad():
@@ -213,6 +212,7 @@ def eval_fn(net, criterion, target_agent, num_states):
       # accuracy
       correct += torch.max(prediction, 1)[1] == action
       # print(f'correct = {correct}')
+    print(f'eval took {time() - start} seconds')
     return 100 * running_loss / num_states, 100 * correct.item() / num_states
 
 
@@ -242,11 +242,13 @@ def train_eval(config,
                                       drop_actions=True,
                                       load_state_as_type='dict')
   trainloader = DataLoader(trainset, batch_size=None)
+  testloader = StateActionCollector(AGENT_CLASSES, 3)
 
   net = model.get_model(observation_size=956,  # todo derive this from game_config
                         num_actions=30,
                         num_hidden_layers=num_hidden_layers,
                         layer_size=layer_size)
+
   criterion = torch.nn.CrossEntropyLoss()
   optimizer = optim.Adam(net.parameters(), lr=lr)
   it = 0
@@ -267,7 +269,8 @@ def train_eval(config,
         if it % log_interval == 0 and not use_ray:
           print(f'Iteration {it}...')
         if it % eval_interval == 0:
-          loss, acc = eval_fn(net=net, criterion=criterion, target_agent=target_agent, num_states=num_eval_states)
+          loss, acc = eval_fn(net=net, eval_loader=testloader, criterion=criterion, target_agent=target_agent,
+                              num_states=num_eval_states)
           if not use_ray:
             print(f'Loss at iteration {it} is {loss}, and accuracy is {acc} %')
           else:
@@ -291,7 +294,8 @@ def train_eval(config,
         raise e
 
 
-def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_interval, eval_interval, num_eval_states, num_samples):
+def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_interval, eval_interval, num_eval_states,
+                            num_samples):
   train_fn = partial(train_eval,
                      from_db_path=FROM_DB_PATH,
                      target_table='pool_of_state_dicts',
@@ -362,7 +366,7 @@ def tune_best_model_with_pbt(analysis):
 
 
 def main():
-  USE_RAY = True
+  USE_RAY = False
   # todo include num_players to sql query
   num_players = 3
   agentname = 'VanDenBerghAgent'
@@ -374,33 +378,33 @@ def main():
             'num_players': num_players,
             'agent_config': {'players': num_players}
             }
-  train_fn = partial(train_eval,
-                     from_db_path=FROM_DB_PATH,
-                     target_table='pool_of_state_dicts',
-                     log_interval=LOG_INTERVAL,
-                     eval_interval=EVAL_INTERVAL,
-                     num_eval_states=NUM_EVAL_STATES,
-                     break_at_iteration=np.inf,
-                     use_ray=True
-                     )
-  print(tune.utils.diagnose_serialization(train_fn))
-  exit(0)
-  #
-  # for agentname, agentcls in AGENT_CLASSES.items():
-  #   if USE_RAY:
-  #     best_model_analysis = select_best_model(name=agentname, agentcls=agentcls)  # USE DEFAULTS for metric etc
-  #     final_model_dir = tune_best_model_with_pbt(best_model_analysis)
-  #   else:
-  #     train_eval(config,
-  #                conn=None,
-  #                checkpoint_dir=None,
-  #                from_db_path=FROM_DB_PATH,
-  #                target_table='pool_of_state_dicts',
-  #                log_interval=LOG_INTERVAL,
-  #                eval_interval=EVAL_INTERVAL,
-  #                num_eval_states=NUM_EVAL_STATES,
-  #                break_at_iteration=np.inf,
-  #                use_ray=False)
+  # train_fn = partial(train_eval,
+  #                    # from_db_path='/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db',
+  #                    # target_table='pool_of_state_dicts',
+  #                    # log_interval=10,
+  #                    # eval_interval=20,
+  #                    # num_eval_states=500,
+  #                    # break_at_iteration=100,
+  #                    # use_ray=True
+  #                    )
+  # print(tune.utils.diagnose_serialization(train_fn))
+  # exit(0)
+
+  for agentname, agentcls in AGENT_CLASSES.items():
+    if USE_RAY:
+      best_model_analysis = select_best_model(name=agentname, agentcls=agentcls)  # USE DEFAULTS for metric etc
+      final_model_dir = tune_best_model_with_pbt(best_model_analysis)
+    else:
+      train_eval(config,
+                 conn=None,
+                 checkpoint_dir=None,
+                 from_db_path=FROM_DB_PATH,
+                 target_table='pool_of_state_dicts',
+                 log_interval=LOG_INTERVAL,
+                 eval_interval=EVAL_INTERVAL,
+                 num_eval_states=NUM_EVAL_STATES,
+                 break_at_iteration=np.inf,
+                 use_ray=False)
 
 
 if __name__ == '__main__':
