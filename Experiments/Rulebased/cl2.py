@@ -245,7 +245,7 @@ class StateActionCollector:
   @staticmethod
   def _accumulate_states_maybe_actions(source, target):
     """ Assumes target has keys 'states' and 'actions' """
-    if not isinstance(target['states'], torch.FloatTensor):
+    if not isinstance(target['states'], torch.FloatTensor)  or isinstance(target['states'], np.ndarray):
       target['states'] = np.array(source['states'])
       target['actions'] = np.array(source['actions'])  # may be empty, depending on drop_actions
     else:
@@ -301,7 +301,7 @@ class StateActionCollector:
 
   def collect(self,
               drop_actions=False,
-              max_states=1000,
+              num_states_to_collect=1000,
               target_agent=None,
               games_per_group=1,
               insert_to_database_at: Optional[str] = None,
@@ -328,7 +328,7 @@ class StateActionCollector:
     k = self.num_players - bool(target_agent)  # maybe save one spot for target agent
     pickle_pyhanabi=False if insert_to_database_at else True
 
-    while num_states_collected < max_states:
+    while num_states_collected < num_states_to_collect:
       # play one game with randomly sampled agents
       players = self._get_players(k=k, target_agent=target_agent)
       replay_dictionary, num_turns_played = self.runner.run(players,
@@ -356,7 +356,7 @@ class StateActionCollector:
 
     if not insert_to_database_at:
       return self._formatted_eager_return_values(eager_return_values=eager_return_values,
-                                                 max_states=max_states,
+                                                 max_states=num_states_to_collect,
                                                  keep_obs_dict=keep_obs_dict,
                                                  drop_actions=drop_actions)
 

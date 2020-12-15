@@ -21,7 +21,7 @@ def test_save_load():
 
 def test_generate():
     gen = cl2.StateActionCollector(AGENT_CLASSES, 3)
-    states, actions = gen.collect(max_states=10)
+    states, actions = gen.collect(num_states_to_collect=10)
     print(len(states))
 test_generate()
 

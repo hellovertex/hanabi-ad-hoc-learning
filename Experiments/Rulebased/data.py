@@ -47,7 +47,7 @@ class IterableStatesCollection(torch.utils.data.IterableDataset):
 
     def get_states(self):
         states, actions = self._data_collector.collect(drop_actions=False,
-                                                       max_states=self._len_iter,
+                                                       num_states_to_collect=self._len_iter,
                                                        agent_id=self._target_agent,
                                                        games_per_group=10)
         # states, actions = torch.from_numpy(states).type(torch.FloatTensor), torch.max(torch.from_numpy(actions), 1)[1]
@@ -82,7 +82,7 @@ class StateActionWriter:
         observation as a dictionary """
         collected = 0
         while collected < num_rows_to_add:
-            self._data_collector.collect(max_states=1000,  # only thousand at once because its slow otherwise
+            self._data_collector.collect(num_states_to_collect=1000,  # only thousand at once because its slow otherwise
                                          insert_to_database_at=path_to_db,
                                          keep_obs_dict=use_state_dict)
             collected += 1000
@@ -96,7 +96,7 @@ def write(path_to_db, num_rows_to_add, use_state_dict=False):
 def collect(num_states_to_collect):
     collector = StateActionCollector(AGENT_CLASSES, 3)
     states = collector.collect(drop_actions=False,
-                               max_states=num_states_to_collect,
+                               num_states_to_collect=num_states_to_collect,
                                target_agent=None,
                                keep_obs_dict=True,
                                keep_agent=False)
