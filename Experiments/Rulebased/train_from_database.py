@@ -22,7 +22,7 @@ import torch.optim as optim
 from cl2 import AGENT_CLASSES
 import ray
 from ray import tune
-from ray.tune.schedulers import ASHAScheduler
+from ray.tune.schedulers import ASHAScheduler, PopulationBasedTraining
 from ray.tune import CLIReporter
 import os
 from time import time
@@ -39,12 +39,14 @@ if DEBUG:
   # for model selection
   GRACE_PERIOD = 1
   MAX_T = 100
+  NUM_SAMPLES = 1
 else:
   LOG_INTERVAL = 100
   EVAL_INTERVAL = 1000
   NUM_EVAL_STATES = 500
   GRACE_PERIOD = int(1e4)
   MAX_T = int(1e5)
+  NUM_SAMPLES = 10
 
 KEEP_CHECKPOINTS_NUM = 50
 VERBOSE = 1
@@ -200,6 +202,7 @@ def eval_fn(net, eval_loader, criterion, target_agent, num_states):
   observations_pickled = eval_loader.collect(num_states_to_collect=num_states,
                                              keep_obs_dict=True,
                                              keep_agent=False)
+  print(f'Collecting eval states took {time() - start} seconds')
   correct = 0
   running_loss = 0
   with torch.no_grad():
@@ -253,6 +256,8 @@ def train_eval(config,
   optimizer = optim.Adam(net.parameters(), lr=lr)
   it = 0
   epoch = 1
+  moving_acc = 0
+  eval_it = 0
   while True:
     try:
       for state in trainloader:
@@ -271,17 +276,19 @@ def train_eval(config,
         if it % eval_interval == 0:
           loss, acc = eval_fn(net=net, eval_loader=testloader, criterion=criterion, target_agent=target_agent,
                               num_states=num_eval_states)
+          moving_acc += acc
+          eval_it += 1
           if not use_ray:
-            print(f'Loss at iteration {it} is {loss}, and accuracy is {acc} %')
+            print(f'Loss at iteration {it} is {loss}, and accuracy is {moving_acc/eval_it} %')
           else:
-            tune.report(training_iteration=it, loss=loss, acc=acc)
+            tune.report(training_iteration=it, loss=loss, acc=moving_acc/eval_it)
             # checkpoint frequency may be handled by ray if we remove checkpointing here
             with tune.checkpoint_dir(step=it) as checkpoint_dir:
               path = os.path.join(checkpoint_dir, 'checkpoint')
               torch.save((net.state_dict, optimizer.state_dict), path)
         it += 1
         if it > break_at_iteration:
-          break
+          return
     except Exception as e:
       if isinstance(e, StopIteration):
         # database has been read fully, start over
@@ -295,14 +302,14 @@ def train_eval(config,
 
 
 def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_interval, eval_interval, num_eval_states,
-                            num_samples):
+                            num_samples, max_train_steps):
   train_fn = partial(train_eval,
                      from_db_path=FROM_DB_PATH,
                      target_table='pool_of_state_dicts',
                      log_interval=log_interval,
                      eval_interval=eval_interval,
                      num_eval_states=num_eval_states,
-                     break_at_iteration=np.inf,
+                     break_at_iteration=max_train_steps,
                      use_ray=True
                      )
   analysis = tune.run(train_fn,
@@ -320,15 +327,15 @@ def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_int
                       )
   best_trial = analysis.get_best_trial("acc", "max")
   print(best_trial.config)
-  print(analysis.best_dataframe['acc'])
+  # print(analysis.best_dataframe['acc'])
   return analysis
 
 
-def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=int(1e4), max_t=int(1e5), num_samples=10):
+def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=GRACE_PERIOD, max_t=MAX_T, num_samples=NUM_SAMPLES):
   scheduler = ASHAScheduler(time_attr='training_iteration',
-                            metric=metric,
+                            #metric=metric,
                             grace_period=grace_period,
-                            mode=mode,
+                            #mode=mode,
                             max_t=max_t)  # current implementation raises stop iteration when db is finished
   # todo if necessary, build the search space from call params
   search_space = {'agent': agentcls,
@@ -345,31 +352,57 @@ def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=int
   return run_train_eval_with_ray(name=name,
                                  scheduler=scheduler,
                                  search_space=search_space,
-                                 metric=None,  # handled by scheduler, mutually exclusive
-                                 mode=None,  # handled by scheduler, mutually exclusive
+                                 metric=metric,  # handled by scheduler, mutually exclusive
+                                 mode=mode,  # handled by scheduler, mutually exclusive
                                  log_interval=LOG_INTERVAL,
                                  eval_interval=EVAL_INTERVAL,
                                  num_eval_states=NUM_EVAL_STATES,
-                                 num_samples=num_samples
+                                 num_samples=num_samples,
+                                 max_train_steps=MAX_T+1
                                  )
 
 
-def tune_best_model_with_pbt(analysis):
+def tune_best_model(experiment_name, analysis, with_pbt, max_train_steps=1e6):
   # load config from analysis_obj
   best_trial = analysis.get_best_trial("acc", "max")
   config = best_trial.config
+  print(analysis.best_checkpoint)
+  print(analysis.best_logdir)
+  print(analysis.best_result)
+  print(analysis.best_result_df)
   print(config)
   # create search space for pbt
-  # create pbt scheduler
+  search_space = {
+      "lr": tune.uniform(1e-2, 1e-4),
+    }
+  # create pbt scheduler, see https://docs.ray.io/en/master/tune/api_docs/schedulers.html
+  pbt = PopulationBasedTraining(
+    time_attr="training_iteration",
+    #metric="acc",
+    #mode="max",
+    perturbation_interval=500,  # every 10 `time_attr` units
+    # (training_iterations in this case)
+    hyperparam_mutations=search_space)
   # run pbt with final checkpoint dir
-  return 'Will return directory containing final model dir'
+  return run_train_eval_with_ray(name=experiment_name,
+                                 scheduler=pbt,
+                                 search_space=config,
+                                 metric='acc',  # handled by scheduler, mutually exclusive
+                                 mode='max',  # handled by scheduler, mutually exclusive
+                                 log_interval=LOG_INTERVAL,
+                                 eval_interval=EVAL_INTERVAL,
+                                 num_eval_states=NUM_EVAL_STATES,
+                                 num_samples=NUM_SAMPLES,
+                                 max_train_steps=max_train_steps
+                                 )
+
 
 
 def main():
-  USE_RAY = False
+  USE_RAY = True
   # todo include num_players to sql query
   num_players = 3
-  agentname = 'VanDenBerghAgent'
+  # agentname = 'VanDenBerghAgent'
   config = {'agent': FlawedAgent,
             'lr': 2e-3,
             'num_hidden_layers': 1,
@@ -392,8 +425,12 @@ def main():
 
   for agentname, agentcls in AGENT_CLASSES.items():
     if USE_RAY:
-      best_model_analysis = select_best_model(name=agentname, agentcls=agentcls)  # USE DEFAULTS for metric etc
-      final_model_dir = tune_best_model_with_pbt(best_model_analysis)
+      # todo add restore=trial.checkpoint.value if necessary to continue training
+      best_model_analysis = select_best_model(name=agentname, agentcls=agentcls, num_samples=NUM_SAMPLES)  # USE DEFAULTS for metric etc
+      # todo maybe create two tune.Experiment instances for these
+      final_model_dir = tune_best_model(experiment_name=agentname,analysis=best_model_analysis,with_pbt=True)
+      print('exiting...')
+      print(f'Trained model weights and checkpoints are stored in {final_model_dir}')
     else:
       train_eval(config,
                  conn=None,
