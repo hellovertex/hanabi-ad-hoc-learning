@@ -1,3 +1,4 @@
+import time
 from typing import List, Dict, Optional, Tuple
 import numpy as np
 import pickle
@@ -20,6 +21,7 @@ from typing import NamedTuple
 import database as db
 
 print(rl_env.__file__)
+
 
 # todo: filter for keys of observation that will get pickled, so that database is not too big
 # todo: move dict_to_int(action) function from training to collection (here)
@@ -245,7 +247,7 @@ class StateActionCollector:
   @staticmethod
   def _accumulate_states_maybe_actions(source, target):
     """ Assumes target has keys 'states' and 'actions' """
-    if not isinstance(target['states'], torch.FloatTensor)  or isinstance(target['states'], np.ndarray):
+    if not isinstance(target['states'], torch.FloatTensor) or isinstance(target['states'], np.ndarray):
       target['states'] = np.array(source['states'])
       target['actions'] = np.array(source['actions'])  # may be empty, depending on drop_actions
     else:
@@ -326,11 +328,13 @@ class StateActionCollector:
     # initialize all agents only once, and then pass them over to run function
     self._initialize_all_agents()
     k = self.num_players - bool(target_agent)  # maybe save one spot for target agent
-    pickle_pyhanabi=False if insert_to_database_at else True
-
+    pickle_pyhanabi = False if insert_to_database_at else True
+    game_num = 1
     while num_states_collected < num_states_to_collect:
       # play one game with randomly sampled agents
       players = self._get_players(k=k, target_agent=target_agent)
+
+      start = time.time()
       replay_dictionary, num_turns_played = self.runner.run(players,
                                                             max_games=games_per_group,
                                                             target_agent=target_agent,
@@ -338,6 +342,8 @@ class StateActionCollector:
                                                             keep_obs_dict=keep_obs_dict,
                                                             keep_agent=keep_agent,
                                                             pickle_pyhanabi=pickle_pyhanabi)
+      # print(f'collecting {num_turns_played} from game {game_num} turns took {time.time() - start} seconds')
+      game_num += 1
       # 1. write to database
       if insert_to_database_at:
         self.write_to_database(path=insert_to_database_at,
@@ -359,4 +365,3 @@ class StateActionCollector:
                                                  max_states=num_states_to_collect,
                                                  keep_obs_dict=keep_obs_dict,
                                                  drop_actions=drop_actions)
-

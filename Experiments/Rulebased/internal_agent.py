@@ -28,7 +28,11 @@ class InternalAgent(Agent):
     self.max_information_tokens = config.get('information_tokens', 8)
 
     # self.rules = [Ruleset.play_safe_card,Ruleset.tell_playable_card_outer,Ruleset.discard_randomly,Ruleset.legal_random]
-    self.rules = [Ruleset.play_safe_card,Ruleset.osawa_discard,Ruleset.tell_playable_card,Ruleset.tell_randomly,Ruleset.discard_randomly]
+    self.rules = [Ruleset.play_safe_card,
+                  Ruleset.osawa_discard,
+                  Ruleset.tell_playable_card,
+                  Ruleset.tell_randomly,
+                  Ruleset.discard_randomly]
 
     self.rulebased = RulebasedAgent(self.rules)
 
