@@ -30,6 +30,27 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
+DEBUG = True
+if DEBUG:
+  LOG_INTERVAL = 10
+  EVAL_INTERVAL = 20
+  NUM_EVAL_STATES = 500
+  # for model selection
+  GRACE_PERIOD=1
+  MAX_T = 100
+else:
+  LOG_INTERVAL = 100
+  EVAL_INTERVAL = 1000
+  NUM_EVAL_STATES = 500
+  GRACE_PERIOD = int(1e4)
+  MAX_T = int(1e5)
+
+KEEP_CHECKPOINTS_NUM = 50
+VERBOSE = 1
+from_db_path_notebook = '/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
+from_db_path_desktop = '/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
+FROM_DB_PATH = from_db_path_notebook
+
 # todo load from config
 hand_size = 5
 num_players = 3
@@ -178,8 +199,8 @@ statecollector = StateActionCollector(AGENT_CLASSES, 3)
 def eval_fn(net, criterion, target_agent, num_states):
   # load pickled observations and get vectorized and compute action and eval with that
   observations_pickled = statecollector.collect(num_states_to_collect=num_states,
-                                           keep_obs_dict=True,
-                                           keep_agent=False)
+                                                keep_obs_dict=True,
+                                                keep_agent=False)
   correct = 0
   running_loss = 0
   with torch.no_grad():
@@ -191,7 +212,7 @@ def eval_fn(net, criterion, target_agent, num_states):
       running_loss += criterion(prediction, action)
       # accuracy
       correct += torch.max(prediction, 1)[1] == action
-      print(f'correct = {correct}')
+      # print(f'correct = {correct}')
     return 100 * running_loss / num_states, 100 * correct.item() / num_states
 
 
@@ -216,6 +237,7 @@ def train_eval(config,
   if from_db_path is None:
     raise NotImplementedError("Todo: Implement the database setup before training on new machines. ")
   trainset = PoolOfStatesFromDatabase(from_db_path=from_db_path,
+                                      target_table=target_table,
                                       batch_size=batch_size,
                                       drop_actions=True,
                                       load_state_as_type='dict')
@@ -228,89 +250,65 @@ def train_eval(config,
   criterion = torch.nn.CrossEntropyLoss()
   optimizer = optim.Adam(net.parameters(), lr=lr)
   it = 0
+  epoch = 1
+  while True:
+    try:
+      for state in trainloader:
+        observation = state[0]
+        action = target_agent.act(observation)
+        action = torch.LongTensor([to_int(action)])
+        vectorized = torch.FloatTensor(observation['vectorized'])
+        optimizer.zero_grad()
+        outputs = net(vectorized).reshape(1, -1)
+        loss = criterion(outputs, action)
+        loss.backward()
+        optimizer.step()
 
-  for state in trainloader:
-    observation = state[0]
-    action = target_agent.act(observation)
-    action = torch.LongTensor([to_int(action)])
-    vectorized = torch.FloatTensor(observation['vectorized'])
-    optimizer.zero_grad()
-    outputs = net(vectorized).reshape(1, -1)
-    loss = criterion(outputs, action)
-    loss.backward()
-    optimizer.step()
-
-    if it % log_interval == 0 and not use_ray:
-      print(f'Iteration {it}...')
-    if it % eval_interval == 0:
-      loss, acc = eval_fn(net=net, criterion=criterion, target_agent=target_agent, num_states=num_eval_states)
-      if not use_ray:
-        print(f'Loss at iteration {it} is {loss}, and accuracy is {acc} %')
+        if it % log_interval == 0 and not use_ray:
+          print(f'Iteration {it}...')
+        if it % eval_interval == 0:
+          loss, acc = eval_fn(net=net, criterion=criterion, target_agent=target_agent, num_states=num_eval_states)
+          if not use_ray:
+            print(f'Loss at iteration {it} is {loss}, and accuracy is {acc} %')
+          else:
+            tune.report(training_iteration=it, loss=loss, acc=acc)
+            # checkpoint frequency may be handled by ray if we remove checkpointing here
+            with tune.checkpoint_dir(step=it) as checkpoint_dir:
+              path = os.path.join(checkpoint_dir, 'checkpoint')
+              torch.save((net.state_dict, optimizer.state_dict), path)
+        it += 1
+        if it > break_at_iteration:
+          break
+    except Exception as e:
+      if isinstance(e, StopIteration):
+        # database has been read fully, start over
+        trainloader = DataLoader(trainset, batch_size=None)
+        epoch += 1
+        continue
       else:
-        tune.report(training_iteration=it, loss=loss, acc=acc)
-        # checkpoint frequency may be handled by ray if we remove checkpointing here
-        with tune.checkpoint_dir(step=it) as checkpoint_dir:
-          path = os.path.join(checkpoint_dir, 'checkpoint')
-          torch.save((net.state_dict, optimizer.state_dict), path)
-    it += 1
-    if it > break_at_iteration:
-      break
+        print(e)
+        print(traceback.print_exc())
+        raise e
 
 
-def run_train_eval_with_ray(agentname, log_interval, eval_interval, num_eval_states, scheduler=None):
-  def _deprecated():
-    def trial_dirname_creator_fn(trial):
-      config = trial.config
-      agent = config['agent']
-      return 'players=' + str(config['num_players']) + '_agent=' + str(config['agent']) + '_hidden_layers=' + str(
-        config['num_hidden_layers']) + '_hidden_size=' + str(config['layer_size']) + '_lr=' + str(
-        config['lr']) + '_batch_size=' + str(config['batch_size'])
-
-    class AccuracyStopper(ray.tune.Stopper):
-      def __init__(self):
-        pass
-
-      def __call__(self, *args, **kwargs):
-        return False
-
-      def stop_all(self):
-        pass
-  keep_checkpoints_num = 50
-  verbose = 1
-  num_samples = 10
-  from_db_path_notebook = '/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
-  from_db_path_desktop = '/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
-
-  search_space = {'agent': AGENT_CLASSES[agentname],  # tune.choice(AGENT_CLASSES.values()),
-                  'lr': tune.loguniform(1e-4, 1e-1),  # learning rate seems to be best in [2e-3, 4e-3]
-                  'num_hidden_layers': 1,  # tune.grid_search([1, 2]),
-                  'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
-                  'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
-                  'num_players': num_players,
-                  'agent_config': {'players': num_players}
-                  }
-
+def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_interval, eval_interval, num_eval_states, num_samples):
   train_fn = partial(train_eval,
-                     from_db_path=None,
+                     from_db_path=FROM_DB_PATH,
                      target_table='pool_of_state_dicts',
                      log_interval=log_interval,
                      eval_interval=eval_interval,
-                     num_eval_states=num_eval_states
+                     num_eval_states=num_eval_states,
+                     break_at_iteration=np.inf,
+                     use_ray=True
                      )
-  scheduler = ASHAScheduler(time_attr='training_iteration',
-                            # metric="acc",
-                            grace_period=int(1e3),
-                            # mode="max",
-                            max_t=int(257e3))  # current implementation raises stop iteration when db is finished
-  pbt = None
   analysis = tune.run(train_fn,
-                      metric='acc',
-                      mode='max',
+                      metric=metric,
+                      mode=mode,
                       config=search_space,
-                      name=agentname,
+                      name=name,
                       num_samples=num_samples,
-                      keep_checkpoints_num=keep_checkpoints_num,
-                      verbose=verbose,
+                      keep_checkpoints_num=KEEP_CHECKPOINTS_NUM,
+                      verbose=VERBOSE,
                       # stopipp=ray.tune.EarlyStopping(metric='acc', top=5, patience=1, mode='max'),
                       scheduler=scheduler,
                       progress_reporter=CLIReporter(metric_columns=["loss", "acc", "training_iteration"]),
@@ -319,43 +317,90 @@ def run_train_eval_with_ray(agentname, log_interval, eval_interval, num_eval_sta
   best_trial = analysis.get_best_trial("acc", "max")
   print(best_trial.config)
   print(analysis.best_dataframe['acc'])
+  return analysis
+
+
+def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=int(1e4), max_t=int(1e5), num_samples=10):
+  scheduler = ASHAScheduler(time_attr='training_iteration',
+                            metric=metric,
+                            grace_period=grace_period,
+                            mode=mode,
+                            max_t=max_t)  # current implementation raises stop iteration when db is finished
+  # todo if necessary, build the search space from call params
+  search_space = {'agent': agentcls,
+                  'lr': tune.loguniform(2e-3, 4e-3),  # learning rate seems to be best in [2e-3, 4e-3], old [1e-4, 1e-1]
+                  'num_hidden_layers': 1,  # tune.grid_search([1, 2]),
+                  # 'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
+                  # 'layer_size': tune.grid_search([64, 96, 128, 196, 256]),
+                  # 'layer_size': tune.grid_search([64, 128, 256]),
+                  'layer_size': tune.grid_search([64, 128, 256]),
+                  'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
+                  'num_players': num_players,
+                  'agent_config': {'players': num_players}
+                  }
+  return run_train_eval_with_ray(name=name,
+                                 scheduler=scheduler,
+                                 search_space=search_space,
+                                 metric=None,  # handled by scheduler, mutually exclusive
+                                 mode=None,  # handled by scheduler, mutually exclusive
+                                 log_interval=LOG_INTERVAL,
+                                 eval_interval=EVAL_INTERVAL,
+                                 num_eval_states=NUM_EVAL_STATES,
+                                 num_samples=num_samples
+                                 )
+
+
+def tune_best_model_with_pbt(analysis):
+  # load config from analysis_obj
+  best_trial = analysis.get_best_trial("acc", "max")
+  config = best_trial.config
+  print(config)
+  # create search space for pbt
+  # create pbt scheduler
+  # run pbt with final checkpoint dir
+  return 'Will return directory containing final model dir'
+
 
 def main():
-  DEBUG = True
-  USE_RAY = False
+  USE_RAY = True
   # todo include num_players to sql query
   num_players = 3
   agentname = 'VanDenBerghAgent'
   config = {'agent': FlawedAgent,
-            'lr': 1e-2,
+            'lr': 2e-3,
             'num_hidden_layers': 1,
-            'layer_size': 256,
+            'layer_size': 64,
             'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
             'num_players': num_players,
             'agent_config': {'players': num_players}
             }
-  if DEBUG:
-    log_interval = 10
-    eval_interval = 20
-    num_eval_states = 100
-  else:
-    log_interval = 100
-    eval_interval = 1000
-    num_eval_states = 500
-
-  if USE_RAY:
-    run_train_eval_with_ray(agentname, log_interval, eval_interval, num_eval_states)
-  else:
-    train_eval(config,
-               conn=None,
-               checkpoint_dir=None,
-               from_db_path='./database_test.db',
-               target_table='pool_of_state_dicts',
-               log_interval=log_interval,
-               eval_interval=eval_interval,
-               num_eval_states=num_eval_states,
-               break_at_iteration=np.inf,
-               use_ray=False)
+  train_fn = partial(train_eval,
+                     from_db_path=FROM_DB_PATH,
+                     target_table='pool_of_state_dicts',
+                     log_interval=LOG_INTERVAL,
+                     eval_interval=EVAL_INTERVAL,
+                     num_eval_states=NUM_EVAL_STATES,
+                     break_at_iteration=np.inf,
+                     use_ray=True
+                     )
+  print(tune.utils.diagnose_serialization(train_fn))
+  exit(0)
+  #
+  # for agentname, agentcls in AGENT_CLASSES.items():
+  #   if USE_RAY:
+  #     best_model_analysis = select_best_model(name=agentname, agentcls=agentcls)  # USE DEFAULTS for metric etc
+  #     final_model_dir = tune_best_model_with_pbt(best_model_analysis)
+  #   else:
+  #     train_eval(config,
+  #                conn=None,
+  #                checkpoint_dir=None,
+  #                from_db_path=FROM_DB_PATH,
+  #                target_table='pool_of_state_dicts',
+  #                log_interval=LOG_INTERVAL,
+  #                eval_interval=EVAL_INTERVAL,
+  #                num_eval_states=NUM_EVAL_STATES,
+  #                break_at_iteration=np.inf,
+  #                use_ray=False)
 
 
 if __name__ == '__main__':
