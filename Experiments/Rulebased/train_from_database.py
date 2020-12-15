@@ -31,7 +31,7 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
-DEBUG = True
+DEBUG = False
 if DEBUG:
   LOG_INTERVAL = 10
   EVAL_INTERVAL = 20
@@ -42,8 +42,8 @@ if DEBUG:
   NUM_SAMPLES = 1
 else:
   LOG_INTERVAL = 100
-  EVAL_INTERVAL = 1000
-  NUM_EVAL_STATES = 500
+  EVAL_INTERVAL = 500
+  NUM_EVAL_STATES = 300
   GRACE_PERIOD = int(1e4)
   MAX_T = int(1e5)
   NUM_SAMPLES = 10
@@ -52,7 +52,7 @@ KEEP_CHECKPOINTS_NUM = 50
 VERBOSE = 1
 from_db_path_notebook = '/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
 from_db_path_desktop = '/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
-FROM_DB_PATH = from_db_path_notebook
+FROM_DB_PATH = from_db_path_desktop
 
 # todo load from config
 hand_size = 5
@@ -202,7 +202,7 @@ def eval_fn(net, eval_loader, criterion, target_agent, num_states):
   observations_pickled = eval_loader.collect(num_states_to_collect=num_states,
                                              keep_obs_dict=True,
                                              keep_agent=False)
-  print(f'Collecting eval states took {time() - start} seconds')
+  # print(f'Collecting eval states took {time() - start} seconds')
   correct = 0
   running_loss = 0
   with torch.no_grad():
@@ -215,7 +215,7 @@ def eval_fn(net, eval_loader, criterion, target_agent, num_states):
       # accuracy
       correct += torch.max(prediction, 1)[1] == action
       # print(f'correct = {correct}')
-    print(f'eval took {time() - start} seconds')
+    # print(f'eval took {time() - start} seconds')
     return 100 * running_loss / num_states, 100 * correct.item() / num_states
 
 
@@ -227,7 +227,7 @@ def train_eval(config,
                log_interval=100,
                eval_interval=1000,
                num_eval_states=100,
-               break_at_iteration=np.inf,
+               max_train_steps=np.inf,
                use_ray=True):
   target_agent_cls = config['agent']
   lr = config['lr']
@@ -279,15 +279,15 @@ def train_eval(config,
           moving_acc += acc
           eval_it += 1
           if not use_ray:
-            print(f'Loss at iteration {it} is {loss}, and accuracy is {moving_acc/eval_it} %')
+            print(f'Loss at iteration {it} is {loss}, and accuracy is {moving_acc / eval_it} %')
           else:
-            tune.report(training_iteration=it, loss=loss, acc=moving_acc/eval_it)
+            tune.report(training_iteration=it, loss=loss, acc=moving_acc / eval_it)
             # checkpoint frequency may be handled by ray if we remove checkpointing here
             with tune.checkpoint_dir(step=it) as checkpoint_dir:
               path = os.path.join(checkpoint_dir, 'checkpoint')
               torch.save((net.state_dict, optimizer.state_dict), path)
         it += 1
-        if it > break_at_iteration:
+        if it > max_train_steps:
           return
     except Exception as e:
       if isinstance(e, StopIteration):
@@ -309,7 +309,7 @@ def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_int
                      log_interval=log_interval,
                      eval_interval=eval_interval,
                      num_eval_states=num_eval_states,
-                     break_at_iteration=max_train_steps,
+                     max_train_steps=max_train_steps,
                      use_ray=True
                      )
   analysis = tune.run(train_fn,
@@ -331,11 +331,12 @@ def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_int
   return analysis
 
 
-def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=GRACE_PERIOD, max_t=MAX_T, num_samples=NUM_SAMPLES):
+def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=GRACE_PERIOD, max_t=MAX_T,
+                      num_samples=NUM_SAMPLES):
   scheduler = ASHAScheduler(time_attr='training_iteration',
-                            #metric=metric,
+                            # metric=metric,
                             grace_period=grace_period,
-                            #mode=mode,
+                            # mode=mode,
                             max_t=max_t)  # current implementation raises stop iteration when db is finished
   # todo if necessary, build the search space from call params
   search_space = {'agent': agentcls,
@@ -358,7 +359,7 @@ def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=GRA
                                  eval_interval=EVAL_INTERVAL,
                                  num_eval_states=NUM_EVAL_STATES,
                                  num_samples=num_samples,
-                                 max_train_steps=MAX_T+1
+                                 max_train_steps=MAX_T + 1
                                  )
 
 
@@ -373,13 +374,13 @@ def tune_best_model(experiment_name, analysis, with_pbt, max_train_steps=1e6):
   print(config)
   # create search space for pbt
   search_space = {
-      "lr": tune.uniform(1e-2, 1e-4),
-    }
+    "lr": tune.uniform(1e-2, 1e-4),
+  }
   # create pbt scheduler, see https://docs.ray.io/en/master/tune/api_docs/schedulers.html
   pbt = PopulationBasedTraining(
     time_attr="training_iteration",
-    #metric="acc",
-    #mode="max",
+    # metric="acc",
+    # mode="max",
     perturbation_interval=500,  # every 10 `time_attr` units
     # (training_iterations in this case)
     hyperparam_mutations=search_space)
@@ -397,20 +398,9 @@ def tune_best_model(experiment_name, analysis, with_pbt, max_train_steps=1e6):
                                  )
 
 
-
 def main():
   USE_RAY = True
-  # todo include num_players to sql query
-  num_players = 3
-  # agentname = 'VanDenBerghAgent'
-  config = {'agent': FlawedAgent,
-            'lr': 2e-3,
-            'num_hidden_layers': 1,
-            'layer_size': 64,
-            'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
-            'num_players': num_players,
-            'agent_config': {'players': num_players}
-            }
+
   # train_fn = partial(train_eval,
   #                    # from_db_path='/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db',
   #                    # target_table='pool_of_state_dicts',
@@ -422,16 +412,27 @@ def main():
   #                    )
   # print(tune.utils.diagnose_serialization(train_fn))
   # exit(0)
-
   for agentname, agentcls in AGENT_CLASSES.items():
     if USE_RAY:
       # todo add restore=trial.checkpoint.value if necessary to continue training
-      best_model_analysis = select_best_model(name=agentname, agentcls=agentcls, num_samples=NUM_SAMPLES)  # USE DEFAULTS for metric etc
+      best_model_analysis = select_best_model(name=agentname, agentcls=agentcls,
+                                              num_samples=NUM_SAMPLES)  # USE DEFAULTS for metric etc
       # todo maybe create two tune.Experiment instances for these
-      final_model_dir = tune_best_model(experiment_name=agentname,analysis=best_model_analysis,with_pbt=True)
+      final_model_dir = tune_best_model(experiment_name=agentname, analysis=best_model_analysis, with_pbt=True)
       print('exiting...')
       print(f'Trained model weights and checkpoints are stored in {final_model_dir}')
     else:
+      # todo include num_players to sql query
+      num_players = 3
+      # agentname = 'VanDenBerghAgent'
+      config = {'agent': FlawedAgent,
+                'lr': 2e-3,
+                'num_hidden_layers': 1,
+                'layer_size': 64,
+                'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
+                'num_players': num_players,
+                'agent_config': {'players': num_players}
+                }
       train_eval(config,
                  conn=None,
                  checkpoint_dir=None,
@@ -440,7 +441,7 @@ def main():
                  log_interval=LOG_INTERVAL,
                  eval_interval=EVAL_INTERVAL,
                  num_eval_states=NUM_EVAL_STATES,
-                 break_at_iteration=np.inf,
+                 max_train_steps=np.inf,
                  use_ray=False)
 
 
