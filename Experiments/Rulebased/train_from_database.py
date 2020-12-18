@@ -364,6 +364,7 @@ def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=GRA
 
 
 def tune_best_model(experiment_name, analysis, with_pbt, max_train_steps=1e6):
+  # todo: careful there are still bugs here
   # load config from analysis_obj
   best_trial = analysis.get_best_trial("acc", "max")
   config = best_trial.config
@@ -398,9 +399,12 @@ def tune_best_model(experiment_name, analysis, with_pbt, max_train_steps=1e6):
                                  )
 
 
+def train_best_model():
+  pass
+
+
 def main():
   USE_RAY = True
-
   # train_fn = partial(train_eval,
   #                    # from_db_path='/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db',
   #                    # target_table='pool_of_state_dicts',

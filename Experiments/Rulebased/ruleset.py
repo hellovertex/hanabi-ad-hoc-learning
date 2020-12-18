@@ -523,11 +523,13 @@ class Ruleset():
     return None
 
   @staticmethod
-  def legal_random(observation):
+  def legal_random(observation, pick_first=False):
     """Act based on an observation."""
     if observation['current_player_offset'] == 0:
-      action = random.choice(observation['legal_moves'])
-      return action
+      if pick_first:
+        return observation['legal_moves'][0]
+      else:
+        return random.choice(observation['legal_moves'])
     else:
       return None
 
