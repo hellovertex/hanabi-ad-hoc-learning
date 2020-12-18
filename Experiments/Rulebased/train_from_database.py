@@ -42,6 +42,7 @@ if DEBUG:
   MAX_T = 100
   MAX_TRAIN_ITERS = 1000
   NUM_SAMPLES = 1
+  BATCH_SIZE = 2
 else:
   LOG_INTERVAL = 100
   EVAL_INTERVAL = 500
@@ -97,7 +98,7 @@ class PoolOfStatesFromDatabase(torch.utils.data.IterableDataset):
     self._target_table = target_table
     self._connection = sqlite3.connect(self._from_db_path)
     self._batch_size = batch_size
-    if batch_size != 1: raise NotImplementedError
+    # if batch_size != 1: raise NotImplementedError
     self._load_lazily = load_lazily
     assert load_state_as_type in ['torch.FloatTensor', 'dict'], 'states must be either torch.FloatTensor or dict'
     self._load_state_as_type = load_state_as_type
@@ -268,18 +269,23 @@ def train_eval(config,
   moving_acc = 0
   eval_it = 0
   if not use_ray:
-    writer = SummaryWriter(log_dir=checkpoint_dir + 'manual_train/')
+    ckptdir = checkpoint_dir if checkpoint_dir else ''
+    writer = SummaryWriter(log_dir=ckptdir + 'manual_train/')
 
   while True:
     try:
-      for state in trainloader:
-        observation = state[0]
-        action = target_agent.act(observation)
-        action = torch.LongTensor([to_int(action)])
-        vectorized = torch.FloatTensor(observation['vectorized'])
+      for batch in trainloader:
+        # observation = batch[0]
+        # action = target_agent.act(observation)
+        # action = torch.LongTensor([to_int(action)])
+        # actions = torch.LongTensor([to_int(target_agent.act(obs)) for obs in batch])
+        # vectorized = torch.FloatTensor(observation['vectorized'])
+        # vectorized = torch.FloatTensor([obs['vectorized'] for obs in batch])
+        actions = torch.LongTensor([to_int(target_agent.act(obs)) for obs in batch])
+        vectorized = torch.FloatTensor([obs['vectorized'] for obs in batch])
         optimizer.zero_grad()
-        outputs = net(vectorized).reshape(1, -1)
-        loss = criterion(outputs, action)
+        outputs = net(vectorized).reshape(batch_size, -1)
+        loss = criterion(outputs, actions)
         loss.backward()
         optimizer.step()
 
@@ -371,7 +377,7 @@ def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=GRA
                   # 'layer_size': tune.grid_search([64, 96, 128, 196, 256]),
                   # 'layer_size': tune.grid_search([64, 128, 256]),
                   'layer_size': tune.grid_search([64, 128, 256]),
-                  'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
+                  'batch_size': BATCH_SIZE,  # tune.choice([4, 8, 16, 32]),
                   'num_players': num_players,
                   'agent_config': {'players': num_players}
                   }
@@ -490,7 +496,7 @@ def main():
                 'lr': 2e-3,
                 'num_hidden_layers': 1,
                 'layer_size': 64,
-                'batch_size': 1,  # tune.choice([4, 8, 16, 32]),
+                'batch_size': BATCH_SIZE,  # tune.choice([4, 8, 16, 32]),
                 'num_players': num_players,
                 'agent_config': {'players': num_players}
                 }
