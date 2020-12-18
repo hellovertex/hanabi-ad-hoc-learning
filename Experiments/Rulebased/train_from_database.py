@@ -32,7 +32,7 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
-DEBUG = True
+DEBUG = False
 if DEBUG:
   LOG_INTERVAL = 10
   EVAL_INTERVAL = 20
@@ -47,15 +47,16 @@ else:
   LOG_INTERVAL = 100
   EVAL_INTERVAL = 500
   NUM_EVAL_STATES = 300
-  GRACE_PERIOD = int(1e4)
-  MAX_T = int(1e5)
-  NUM_SAMPLES = 10
+  GRACE_PERIOD = 50000  # tune.report gets only called at EVAL_INTERVAL anyway
+  MAX_T = 500000  # tune.report gets only called at EVAL_INTERVAL anyway
+  NUM_SAMPLES = 2
+  MAX_TRAIN_ITERS = 100000
 
 KEEP_CHECKPOINTS_NUM = 50
 VERBOSE = 1
 from_db_path_notebook = '/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
 from_db_path_desktop = '/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
-FROM_DB_PATH = from_db_path_notebook
+FROM_DB_PATH = from_db_path_desktop
 
 # todo load from config
 hand_size = 5
@@ -283,6 +284,7 @@ def train_eval(config,
         # vectorized = torch.FloatTensor([obs['vectorized'] for obs in batch])
         actions = torch.LongTensor([to_int(target_agent.act(obs)) for obs in batch])
         vectorized = torch.FloatTensor([obs['vectorized'] for obs in batch])
+
         optimizer.zero_grad()
         outputs = net(vectorized).reshape(batch_size, -1)
         loss = criterion(outputs, actions)
@@ -370,7 +372,7 @@ def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=GRA
                             # mode=mode,
                             max_t=max_t)  # current implementation raises stop iteration when db is finished
   # todo if necessary, build the search space from call params
-  search_space = {'agent': agentcls,
+  search_space = {'agent': tune.grid_search(list(AGENT_CLASSES.values())),  #  agentcls,
                   'lr': tune.loguniform(2e-3, 4e-3),  # learning rate seems to be best in [2e-3, 4e-3], old [1e-4, 1e-1]
                   'num_hidden_layers': 1,  # tune.grid_search([1, 2]),
                   # 'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
@@ -482,9 +484,10 @@ def main():
       best_model_analysis = select_best_model(name=agentname, agentcls=agentcls,
                                               num_samples=NUM_SAMPLES)  # USE DEFAULTS for metric etc
       # todo maybe create two tune.Experiment instances for these
-      train_best_model(name=agentname, analysis=best_model_analysis,
-                       train_steps=5e5,
-                       from_db_path=from_db_path_notebook)
+      print(f'Result written to {best_model_analysis.get_best_trial("acc", "max").checkpoint.value}')
+      # train_best_model(name=agentname, analysis=best_model_analysis,
+      #                  train_steps=5e5,
+      #                  from_db_path=FROM_DB_PATH)
       # final_model_dir = tune_best_model(experiment_name=agentname, analysis=best_model_analysis, with_pbt=True).best_checkpoint
       print('exiting...')
       # print(f'Trained model weights and checkpoints are stored in {final_model_dir}')
