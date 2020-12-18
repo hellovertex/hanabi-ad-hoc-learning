@@ -102,7 +102,7 @@ def collect(num_states_to_collect):
                                keep_obs_dict=True,
                                keep_agent=False)
     return states
-write(path_to_db='./database_test.db', num_rows_to_add=5e5, use_state_dict=True)
+write(path_to_db='./database_test.db', num_rows_to_add=int(5e3), use_state_dict=True)
 # # too slow, seconds taken increase linearly with number of states
 # start = time()
 # print(collect(1e2), f'took {time() - start} seconds')

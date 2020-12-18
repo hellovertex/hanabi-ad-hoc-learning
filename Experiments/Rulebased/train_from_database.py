@@ -26,12 +26,13 @@ from ray.tune.schedulers import ASHAScheduler, PopulationBasedTraining
 from ray.tune import CLIReporter
 import os
 from time import time
+from torch.utils.tensorboard import SummaryWriter
 
 AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'OuterAgent': OuterAgent, 'IGGIAgent': IGGIAgent, 'FlawedAgent': FlawedAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
-DEBUG = False
+DEBUG = True
 if DEBUG:
   LOG_INTERVAL = 10
   EVAL_INTERVAL = 20
@@ -39,6 +40,7 @@ if DEBUG:
   # for model selection
   GRACE_PERIOD = 1
   MAX_T = 100
+  MAX_TRAIN_ITERS = 1000
   NUM_SAMPLES = 1
 else:
   LOG_INTERVAL = 100
@@ -52,7 +54,7 @@ KEEP_CHECKPOINTS_NUM = 50
 VERBOSE = 1
 from_db_path_notebook = '/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
 from_db_path_desktop = '/home/hellovertex/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db'
-FROM_DB_PATH = from_db_path_desktop
+FROM_DB_PATH = from_db_path_notebook
 
 # todo load from config
 hand_size = 5
@@ -202,6 +204,8 @@ def eval_fn(net, eval_loader, criterion, target_agent, num_states):
   observations_pickled = eval_loader.collect(num_states_to_collect=num_states,
                                              keep_obs_dict=True,
                                              keep_agent=False)
+  assert len(
+    observations_pickled) == num_states, f'len(observations_pickled)={len(observations_pickled)} and num_states = {num_states}'
   # print(f'Collecting eval states took {time() - start} seconds')
   correct = 0
   running_loss = 0
@@ -213,9 +217,8 @@ def eval_fn(net, eval_loader, criterion, target_agent, num_states):
       # loss
       running_loss += criterion(prediction, action)
       # accuracy
-      correct += torch.max(prediction, 1)[1] == action
-      # print(f'correct = {correct}')
-    # print(f'eval took {time() - start} seconds')
+      correct += torch.sum(torch.max(prediction, 1)[1] == action)
+
     return 100 * running_loss / num_states, 100 * correct.item() / num_states
 
 
@@ -258,12 +261,15 @@ def train_eval(config,
   if checkpoint_dir:
     print("Loading from checkpoints")
     path = os.path.join(checkpoint_dir, "checkpoint")
-    checkpoint = torch.load(path)
-    net.load_state_dict(checkpoint['model_state_dict'])
-    it = checkpoint['step']
+    model_state, optimizer_state = torch.load(path)
+    net.load_state_dict(model_state())
+    optimizer.load_state_dict(optimizer_state())
   epoch = 1
   moving_acc = 0
   eval_it = 0
+  if not use_ray:
+    writer = SummaryWriter(log_dir=checkpoint_dir + 'manual_train/')
+
   while True:
     try:
       for state in trainloader:
@@ -285,9 +291,17 @@ def train_eval(config,
           moving_acc += acc
           eval_it += 1
           if not use_ray:
-            print(f'Loss at iteration {it} is {loss}, and accuracy is {moving_acc / eval_it} %')
+            # print(f'Loss at iteration {it} is {loss}, and accuracy is {moving_acc / eval_it} %')
+            print(f'Loss at iteration {it} is {loss}, and accuracy is {acc} %')
+            writer.add_scalar('Loss/test', loss, it)
+            writer.add_scalar('Accuracy/test', acc, it)
+            if checkpoint_dir:
+              print(f'saving model to {checkpoint_dir}')
+              path = os.path.join(checkpoint_dir, f'checkpoint_+{it}')
+              torch.save((net.state_dict, optimizer.state_dict), path)
           else:
-            tune.report(training_iteration=it, loss=loss, acc=moving_acc / eval_it)
+            # tune.report(training_iteration=it, loss=loss, acc=moving_acc / eval_it)
+            tune.report(training_iteration=it, loss=loss, acc=acc)
             # checkpoint frequency may be handled by ray if we remove checkpointing here
             with tune.checkpoint_dir(step=it) as checkpoint_dir:
               path = os.path.join(checkpoint_dir, 'checkpoint')
@@ -318,6 +332,7 @@ def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_int
                      max_train_steps=max_train_steps,
                      use_ray=True
                      )
+
   analysis = tune.run(train_fn,
                       metric=metric,
                       mode=mode,
@@ -326,6 +341,8 @@ def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_int
                       num_samples=num_samples,
                       keep_checkpoints_num=KEEP_CHECKPOINTS_NUM,
                       verbose=VERBOSE,
+                      trial_dirname_creator=None,
+                      trial_name_creator=None,
                       # stopipp=ray.tune.EarlyStopping(metric='acc', top=5, patience=1, mode='max'),
                       scheduler=scheduler,
                       progress_reporter=CLIReporter(metric_columns=["loss", "acc", "training_iteration"]),
@@ -333,6 +350,8 @@ def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_int
                       )
   best_trial = analysis.get_best_trial("acc", "max")
   print(best_trial.config)
+  print(best_trial.checkpoint)
+
   # print(analysis.best_dataframe['acc'])
   return analysis
 
@@ -365,7 +384,7 @@ def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=GRA
                                  eval_interval=EVAL_INTERVAL,
                                  num_eval_states=NUM_EVAL_STATES,
                                  num_samples=num_samples,
-                                 max_train_steps=MAX_T + 1
+                                 max_train_steps=max(MAX_T + 1, MAX_TRAIN_ITERS)
                                  )
 
 
@@ -405,8 +424,37 @@ def tune_best_model(experiment_name, analysis, with_pbt, max_train_steps=1e6):
                                  )
 
 
-def train_best_model():
-  pass
+def train_best_model(name, analysis, train_steps, from_db_path):
+  # todo load train_eval fn with checkpoint_dir=best_trial.checkpoint_dir and continue training
+  best_trial = analysis.get_best_trial('acc', 'max')
+  checkpoint_dir = best_trial.checkpoint.value
+  print(f'starting trainign in {checkpoint_dir}')
+  config = best_trial.config
+  # train_eval(config=config, checkpoint_dir=checkpoint_dir,use_ray=False, max_train_steps=train_steps, from_db_path=from_db_path, num_eval_states=NUM_EVAL_STATES)
+  train_fn = partial(train_eval, max_train_steps=train_steps, from_db_path=from_db_path,
+                     num_eval_states=NUM_EVAL_STATES)
+
+  def _trial_dirname_creator(trial):
+    return f'Manual_training_lr={trial.config["lr"]}' + f'_layer_size={trial.config["layer_size"]}'
+
+  def _trial_name_creator(trial):
+    return 'only_trial_' + str(trial.config['agent'])
+
+  tune.run(train_fn,
+           metric='acc',
+           mode='max',
+           config=config,
+           name=name,
+           num_samples=1,
+           keep_checkpoints_num=1,
+           verbose=VERBOSE,
+           trial_dirname_creator=_trial_dirname_creator,
+           trial_name_creator=None,
+           # stopipp=ray.tune.EarlyStopping(metric='acc', top=5, patience=1, mode='max'),
+           scheduler=None,
+           progress_reporter=CLIReporter(metric_columns=["loss", "acc", "training_iteration"]),
+           # trial_dirname_creator=trial_dirname_creator_fn
+           )
 
 
 def main():
@@ -428,9 +476,12 @@ def main():
       best_model_analysis = select_best_model(name=agentname, agentcls=agentcls,
                                               num_samples=NUM_SAMPLES)  # USE DEFAULTS for metric etc
       # todo maybe create two tune.Experiment instances for these
-      final_model_dir = tune_best_model(experiment_name=agentname, analysis=best_model_analysis, with_pbt=True)
+      train_best_model(name=agentname, analysis=best_model_analysis,
+                       train_steps=5e5,
+                       from_db_path=from_db_path_notebook)
+      # final_model_dir = tune_best_model(experiment_name=agentname, analysis=best_model_analysis, with_pbt=True).best_checkpoint
       print('exiting...')
-      print(f'Trained model weights and checkpoints are stored in {final_model_dir}')
+      # print(f'Trained model weights and checkpoints are stored in {final_model_dir}')
     else:
       # todo include num_players to sql query
       num_players = 3

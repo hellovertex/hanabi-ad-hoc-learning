@@ -286,9 +286,9 @@ class StateActionCollector:
       return self._accumulate_obs_dicts(source=source, target=target, keep_agent=keep_agent)
 
   @staticmethod
-  def _unpack_obs_dicts(eager_return_values):
+  def _unpack_obs_dicts(eager_return_values, max_states):
     # currently the only key is ['obs_dicts]
-    return eager_return_values['obs_dicts']
+    return eager_return_values['obs_dicts'][:max_states]
 
   @staticmethod
   def _unpack_states_actions(eager_return_values, max_states, drop_actions):
@@ -305,7 +305,7 @@ class StateActionCollector:
 
   def _formatted_eager_return_values(self, eager_return_values, max_states, keep_obs_dict, drop_actions):
     if keep_obs_dict:
-      return self._unpack_obs_dicts(eager_return_values)
+      return self._unpack_obs_dicts(eager_return_values, max_states)
     else:
       return self._unpack_states_actions(eager_return_values, max_states, drop_actions)
 
