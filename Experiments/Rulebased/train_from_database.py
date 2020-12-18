@@ -255,6 +255,12 @@ def train_eval(config,
   criterion = torch.nn.CrossEntropyLoss()
   optimizer = optim.Adam(net.parameters(), lr=lr)
   it = 0
+  if checkpoint_dir:
+    print("Loading from checkpoints")
+    path = os.path.join(checkpoint_dir, "checkpoint")
+    checkpoint = torch.load(path)
+    net.load_state_dict(checkpoint['model_state_dict'])
+    it = checkpoint['step']
   epoch = 1
   moving_acc = 0
   eval_it = 0

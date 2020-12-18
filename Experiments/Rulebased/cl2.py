@@ -38,21 +38,29 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
 
 COLORS = ['R', 'Y', 'G', 'W', 'B']
 
+hand_size = 5
+num_players = 3
+num_colors = 5
+num_ranks = 5
+COLORS = ['R', 'Y', 'G', 'W', 'B']
+COLORS_INV = ['B', 'W', 'G', 'Y', 'R']
+RANKS_INV = [4, 3, 2, 1, 0]
+color_offset = (2 * hand_size)
+rank_offset = color_offset + (num_players - 1) * num_colors
+
 
 def to_int(action_dict):
-  # todo this is wrong. Fix it
-  int_action = None
-  if action_dict['action_type'] == 'PLAY':
-    int_action = action_dict['card_index']  # 0-4 slots
-  elif action_dict['action_type'] == 'DISCARD':
-    int_action = 5 + action_dict['card_index']  # 5-9 slots
-  elif action_dict['action_type'] == 'REVEAL_COLOR':
-    # todo wrong here
-    int_action = 10 + COLORS.index(action_dict['color']) * action_dict['target_offset']  # 10-29 slots
-  elif action_dict['action_type'] == 'REVEAL_RANK':
-    # todo wrong and here
-    int_action = 30 + action_dict['rank'] * action_dict['target_offset']  # 30-49 slots
-  return int(int_action)  # convert from 'numpy.int64' to python int
+  action_type = action_dict['action_type']
+  if action_type == 'DISCARD':
+    return action_dict['card_index']
+  elif action_type == 'PLAY':
+    return hand_size + action_dict['card_index']
+  elif action_type == 'REVEAL_COLOR':
+    return color_offset + action_dict['target_offset'] * num_colors - (COLORS_INV.index(action_dict['color'])) - 1
+  elif action_type == 'REVEAL_RANK':
+    return rank_offset + action_dict['target_offset'] * num_ranks - (RANKS_INV[action_dict['rank']]) - 1
+  else:
+    raise ValueError(f'action_dict was {action_dict}')
 
 
 class Runner:
@@ -103,7 +111,7 @@ class Runner:
         replay_dict[agent.name]['turns'].append(turn_in_game_i)
         replay_dict[agent.name]['obs_dicts'].append(observation)
         if not drop_actions:
-          replay_dict[agent.name]['int_actions'].append(-1)  # to_int_action() currently bugged
+          replay_dict[agent.name]['int_actions'].append(to_int(current_player_action))  # to_int_action() currently bugged
           replay_dict[agent.name]['dict_actions'].append(current_player_action)
       else:
         replay_dict['obs_dicts'].append(observation)

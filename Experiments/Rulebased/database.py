@@ -90,7 +90,7 @@ def insert_state_dict_data(conn, replay_dictionary):
             row = (num_players,
                    agent,
                    replay_dictionary[agent]['turns'][i],
-                   replay_dictionary[agent]['int_actions'][i],
+                   int(replay_dictionary[agent]['int_actions'][i]),
                    str(replay_dictionary[agent]['dict_actions'][i]),
                    team,
                    # parse observation_dictionary
@@ -108,7 +108,7 @@ def insert_state_dict_data(conn, replay_dictionary):
                    # sqlite3.Binary(b'pyhanabi_goes_here')  # sqlite3.Binary(pyhanabi)
                    sqlite3.Binary(pyhanabi)
                    )
-            assert type(row[3]) == int, f'action was {row[4]}'
+            assert type(row[3]) == int, f'action was {row[3]} with type={type(row[3])}'
 
 
             values.append(row)
