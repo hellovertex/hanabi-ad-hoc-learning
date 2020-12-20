@@ -33,6 +33,7 @@ AGENT_CLASSES = {'InternalAgent': InternalAgent,
                  'PiersAgent': PiersAgent, 'VanDenBerghAgent': VanDenBerghAgent}
 
 DEBUG = False
+USE_RAY = True
 if DEBUG:
   LOG_INTERVAL = 10
   EVAL_INTERVAL = 20
@@ -42,15 +43,16 @@ if DEBUG:
   MAX_T = 100
   MAX_TRAIN_ITERS = 1000
   NUM_SAMPLES = 1
-  BATCH_SIZE = 2
+  BATCH_SIZE = 4
 else:
   LOG_INTERVAL = 100
   EVAL_INTERVAL = 500
   NUM_EVAL_STATES = 300
-  GRACE_PERIOD = 50000  # tune.report gets only called at EVAL_INTERVAL anyway
-  MAX_T = 500000  # tune.report gets only called at EVAL_INTERVAL anyway
-  NUM_SAMPLES = 2
+  GRACE_PERIOD = int(1e4)  # tune.report gets only called at EVAL_INTERVAL anyway
+  MAX_T = int(110e3)  # tune.report gets only called at EVAL_INTERVAL anyway
+  NUM_SAMPLES = 10
   MAX_TRAIN_ITERS = 100000
+  BATCH_SIZE = 1  # tune.grid_search([8, 1])
 
 KEEP_CHECKPOINTS_NUM = 50
 VERBOSE = 1
@@ -284,10 +286,10 @@ def train_eval(config,
         # vectorized = torch.FloatTensor([obs['vectorized'] for obs in batch])
         actions = torch.LongTensor([to_int(target_agent.act(obs)) for obs in batch])
         vectorized = torch.FloatTensor([obs['vectorized'] for obs in batch])
-
         optimizer.zero_grad()
         outputs = net(vectorized).reshape(batch_size, -1)
         loss = criterion(outputs, actions)
+
         loss.backward()
         optimizer.step()
 
@@ -364,22 +366,30 @@ def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_int
   return analysis
 
 
-def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=GRACE_PERIOD, max_t=MAX_T,
-                      num_samples=NUM_SAMPLES):
+def select_best_model(name,
+                      agentcls,
+                      metric,
+                      mode,
+                      grace_period,
+                      max_t,
+                      num_samples,
+                      lr,
+                      layer_size,
+                      batch_size):
   scheduler = ASHAScheduler(time_attr='training_iteration',
                             # metric=metric,
                             grace_period=grace_period,
                             # mode=mode,
                             max_t=max_t)  # current implementation raises stop iteration when db is finished
   # todo if necessary, build the search space from call params
-  search_space = {'agent': tune.grid_search(list(AGENT_CLASSES.values())),  #  agentcls,
-                  'lr': tune.loguniform(2e-3, 4e-3),  # learning rate seems to be best in [2e-3, 4e-3], old [1e-4, 1e-1]
+  search_space = {'agent':  agentcls,  # tune.grid_search(list(AGENT_CLASSES.values())),  #  agentcls,
+                  'lr': lr,  # learning rate seems to be best in [2e-3, 4e-3], old [1e-4, 1e-1]
                   'num_hidden_layers': 1,  # tune.grid_search([1, 2]),
                   # 'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
                   # 'layer_size': tune.grid_search([64, 96, 128, 196, 256]),
                   # 'layer_size': tune.grid_search([64, 128, 256]),
-                  'layer_size': tune.grid_search([64, 128, 256]),
-                  'batch_size': BATCH_SIZE,  # tune.choice([4, 8, 16, 32]),
+                  'layer_size': layer_size,
+                  'batch_size': batch_size,  # tune.choice([4, 8, 16, 32]),
                   'num_players': num_players,
                   'agent_config': {'players': num_players}
                   }
@@ -392,7 +402,7 @@ def select_best_model(name, agentcls, metric='acc', mode='max', grace_period=GRA
                                  eval_interval=EVAL_INTERVAL,
                                  num_eval_states=NUM_EVAL_STATES,
                                  num_samples=num_samples,
-                                 max_train_steps=max(MAX_T + 1, MAX_TRAIN_ITERS)
+                                 max_train_steps=max(max_t + 1, MAX_TRAIN_ITERS)
                                  )
 
 
@@ -466,7 +476,6 @@ def train_best_model(name, analysis, train_steps, from_db_path):
 
 
 def main():
-  USE_RAY = True
   # train_fn = partial(train_eval,
   #                    # from_db_path='/home/cawa/Documents/github.com/hellovertex/hanabi-ad-hoc-learning/Experiments/Rulebased/database_test.db',
   #                    # target_table='pool_of_state_dicts',
@@ -480,9 +489,16 @@ def main():
   # exit(0)
   for agentname, agentcls in AGENT_CLASSES.items():
     if USE_RAY:
-      # todo add restore=trial.checkpoint.value if necessary to continue training
-      best_model_analysis = select_best_model(name=agentname, agentcls=agentcls,
-                                              num_samples=NUM_SAMPLES)  # USE DEFAULTS for metric etc
+      best_model_analysis = select_best_model(name=agentname,
+                                              agentcls=agentcls,
+                                              metric='acc',
+                                              mode='max',
+                                              grace_period=GRACE_PERIOD,
+                                              max_t=MAX_T,
+                                              num_samples=NUM_SAMPLES,
+                                              lr=tune.loguniform(1e-2, 4e-3),
+                                              layer_size=tune.grid_search([64, 128, 256]),
+                                              batch_size=BATCH_SIZE)  # USE DEFAULTS for metric etc
       # todo maybe create two tune.Experiment instances for these
       print(f'Result written to {best_model_analysis.get_best_trial("acc", "max").checkpoint.value}')
       # train_best_model(name=agentname, analysis=best_model_analysis,
