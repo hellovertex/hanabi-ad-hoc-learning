@@ -38,7 +38,7 @@ class RulebasedAgent():
             return action
         self.histogram[-1] += 1
         self.totalCalls += 1
-        return Ruleset.legal_random(observation, pick_first=True)
+        return Ruleset.legal_random(observation, pick_random=False)
     except Exception as e:
       print(e)
       traceback.print_exc()

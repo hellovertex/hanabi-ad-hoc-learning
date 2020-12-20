@@ -321,12 +321,15 @@ class Ruleset():
 
   # Note: this rule only looks at the next player on purpose, for compatibility with the Fossgalaxy implementation. Prioritizes color
   @staticmethod
-  def tell_randomly(observation):
+  def tell_randomly(observation, pick_random=False):
     if observation['information_tokens'] > 0:
       PLAYER_OFFSET = 1
       their_hand = observation['observed_hands'][PLAYER_OFFSET]
-      card = random.choice(their_hand)
-      r = random.randint(0, 1)
+      r = 1
+      card = their_hand[0]
+      if pick_random:
+        card = random.choice(their_hand)
+        r = random.randint(0, 1)
       if (r == 0):
         return {
           'action_type': 'REVEAL_RANK',
@@ -496,7 +499,7 @@ class Ruleset():
 
   # Does not take into account what information the other player has into account, and decides whether to hint rank or color randomly
   @staticmethod
-  def tell_playable_card(observation):
+  def tell_playable_card(observation, pick_random=False):
     fireworks = observation['fireworks']
 
     # Check if it's possible to hint a card to your colleagues.
@@ -507,7 +510,9 @@ class Ruleset():
         # Check if the card in the hand of the opponent is playable.
         for card in player_hand:
           if playable_card(card, fireworks):
-            r = random.randint(0, 1)
+            r = 1
+            if pick_random:
+              r = random.randint(0, 1)
             if (r == 0):
               return {
                 'action_type': 'REVEAL_RANK',
@@ -523,10 +528,10 @@ class Ruleset():
     return None
 
   @staticmethod
-  def legal_random(observation, pick_first=False):
+  def legal_random(observation, pick_random=False):
     """Act based on an observation."""
     if observation['current_player_offset'] == 0:
-      if pick_first:
+      if not pick_random:
         return observation['legal_moves'][0]
       else:
         return random.choice(observation['legal_moves'])
@@ -534,12 +539,14 @@ class Ruleset():
       return None
 
   @staticmethod
-  def discard_randomly(observation):
+  def discard_randomly(observation, pick_random=False):
     if observation['information_tokens'] < 8:
       player_offset = 0
       hand = observation['observed_hands'][player_offset]
       hand_size = len(hand)
-      discard_index = random.randint(0, hand_size - 1)
+      discard_index = 0
+      if pick_random:
+        discard_index = random.randint(0, hand_size - 1)
       return {'action_type': 'DISCARD', 'card_index': discard_index}
     return None
 
