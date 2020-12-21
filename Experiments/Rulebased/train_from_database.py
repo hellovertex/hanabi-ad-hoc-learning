@@ -48,11 +48,11 @@ else:
   LOG_INTERVAL = 100
   EVAL_INTERVAL = 500
   NUM_EVAL_STATES = 300
-  GRACE_PERIOD = int(1e4)  # tune.report gets only called at EVAL_INTERVAL anyway
-  MAX_T = int(110e3)  # tune.report gets only called at EVAL_INTERVAL anyway
+  GRACE_PERIOD = int(5e4)  # tune.report gets only called at EVAL_INTERVAL anyway
+  MAX_T = int(150e3)  # tune.report gets only called at EVAL_INTERVAL anyway
   NUM_SAMPLES = 10
   MAX_TRAIN_ITERS = 100000
-  BATCH_SIZE = 1  # tune.grid_search([8, 1])
+  BATCH_SIZE = 16  # tune.grid_search([8, 1])
 
 KEEP_CHECKPOINTS_NUM = 50
 VERBOSE = 1
@@ -86,23 +86,18 @@ def to_int(action_dict):
     raise ValueError(f'action_dict was {action_dict}')
 
 
-class PoolOfStatesFromDatabase(torch.utils.data.IterableDataset):
+class PoolOfStatesFromDatabase:
   def __init__(self, from_db_path='./database_test.db',
                load_state_as_type='dict',  # or 'dict'
                drop_actions=False,
-               size=1e5,
-               target_table='pool_of_state_dicts',
-               batch_size=1,
-               load_lazily=True):
-    super(PoolOfStatesFromDatabase).__init__()
+               size=int(1e5),
+               target_table='pool_of_state_dicts'
+               ):
     self._from_db_path = from_db_path  # path to .db file
     self._drop_actions = drop_actions
     self._size = size
     self._target_table = target_table
     self._connection = sqlite3.connect(self._from_db_path)
-    self._batch_size = batch_size
-    # if batch_size != 1: raise NotImplementedError
-    self._load_lazily = load_lazily
     assert load_state_as_type in ['torch.FloatTensor', 'dict'], 'states must be either torch.FloatTensor or dict'
     self._load_state_as_type = load_state_as_type
     self.QUERY_VARS = ['num_players',
@@ -141,12 +136,44 @@ class PoolOfStatesFromDatabase(torch.utils.data.IterableDataset):
     dict_action = 15
 
   def _build_query(self, table='pool_of_state_dicts') -> str:
-    query_cols = [col + ', ' for col in self.QUERY_VARS]
-    query_cols[-1] = query_cols[-1][:-2]  # remove last ', '
-    query_string = ['SELECT '] + query_cols + [' from ' + table]
-    return "".join(query_string)
+    try:
+      query_cols = [col + ', ' for col in self.QUERY_VARS]
+      query_cols[-1] = query_cols[-1][:-2]  # remove last ', '
+      query_string = ['SELECT '] + query_cols + [' from ' + table] + [f' WHERE _ROWID_ IN (SELECT _ROWID_ FROM {table} ORDER BY RANDOM()'] + [f' LIMIT {self._size})']
+      return "".join(query_string)
+    except Exception as e:
+      print(e)
+      print(traceback.print_exc())
+      exit(1)
 
-  def _parse_row_to_dict(self, row):
+  def get_eagerly(self, batch_length, pyhanabi_as_bytes):
+    dataset = []
+    cursor = self._connection.cursor()
+    query_string = self._build_query()
+    # query database with all the information necessary to build the observation_dictionary
+    cursor.execute(query_string)
+    # parse query
+    it = 0
+    batch_it = 0
+    batch = []
+    for row in cursor:  # database row
+      # build observation_dict from row
+      if batch_it < batch_length:
+        batch.append(self._parse_row_to_dict(row, pyhanabi_as_bytes=pyhanabi_as_bytes))
+        batch_it += 1
+      else:
+        dataset.append(batch)
+        batch = [self._parse_row_to_dict(row, pyhanabi_as_bytes=pyhanabi_as_bytes)]
+        batch_it = 1
+      it += 1
+      if it % 1000 == 0:
+        # print(f'loaded {it} rows')
+        pass
+      if it >= self._size:
+        break
+    return dataset
+
+  def _parse_row_to_dict(self, row, pyhanabi_as_bytes=False):
     obs_dict = {}
     # assign columns of query to corresponding key in observation_dict
     obs_dict[self.QueryCols.num_players.name] = row[self.QueryCols.num_players.value]
@@ -162,12 +189,33 @@ class PoolOfStatesFromDatabase(torch.utils.data.IterableDataset):
     obs_dict[self.QueryCols.observed_hands.name] = eval(row[self.QueryCols.observed_hands.value])
     obs_dict[self.QueryCols.card_knowledge.name] = eval(row[self.QueryCols.card_knowledge.value])
     obs_dict[self.QueryCols.vectorized.name] = eval(row[self.QueryCols.vectorized.value])
-    obs_dict[self.QueryCols.pyhanabi.name] = pickle.loads(row[self.QueryCols.pyhanabi.value])
+    if pyhanabi_as_bytes:
+      obs_dict[self.QueryCols.pyhanabi.name] = row[self.QueryCols.pyhanabi.value]
+    else:
+      obs_dict[self.QueryCols.pyhanabi.name] = pickle.loads(row[self.QueryCols.pyhanabi.value])
+
     if not self._drop_actions:
       obs_dict[self.QueryCols.int_action.name] = row[self.QueryCols.int_action.value]
       obs_dict[self.QueryCols.dict_action.name] = row[self.QueryCols.dict_action.value]
 
     return obs_dict
+
+
+class IterablePoolOfStatesFromDatabase(torch.utils.data.IterableDataset, PoolOfStatesFromDatabase):
+  def __init__(self, from_db_path='./database_test.db',
+               load_state_as_type='dict',  # or 'dict'
+               drop_actions=False,
+               size=int(1e5),
+               target_table='pool_of_state_dicts',
+               batch_size=1):
+    torch.utils.data.IterableDataset.__init__(self)
+    PoolOfStatesFromDatabase.__init__(self, from_db_path=from_db_path,
+                                      load_state_as_type=load_state_as_type,  # or 'dict'
+                                      drop_actions=drop_actions,
+                                      size=size,
+                                      target_table=target_table
+                                      )
+    self.batch_size = batch_size
 
   def _yield_dict(self):
     cursor = self._connection.cursor()
@@ -194,12 +242,53 @@ class PoolOfStatesFromDatabase(torch.utils.data.IterableDataset):
     return zip(*from_list)
 
   def __iter__(self):
-    if self._load_lazily:
-      return iter(self._create_batch([self.get_rows_lazily() for _ in range(self._batch_size)]))
-    else:
-      # todo here, we could load eagerly to distribute a large dataset via ray.tune.run_with_parameters()
-      # but I think the lazy implementation is parallelized quite nicely, because of the yield
-      raise NotImplementedError
+    # if self._load_lazily:
+    #   return iter(self._create_batch([self.get_rows_lazily() for _ in range(self._batch_size)]))
+    # else:
+    #   # todo here, we could load eagerly to distribute a large dataset via ray.tune.run_with_parameters()
+    #   # but I think the lazy implementation is parallelized quite nicely, because of the yield
+    #   raise NotImplementedError
+    return iter(self._create_batch([self.get_rows_lazily() for _ in range(self.batch_size)]))
+
+
+class MapStylePoolOfStatesFromDatabase(torch.utils.data.Dataset, PoolOfStatesFromDatabase):
+  # query all rows
+  # parse row to dict
+  # create list and return iterator over that list
+  def __init__(self, from_db_path='./database_test.db',
+               load_state_as_type='dict',  # or 'dict'
+               drop_actions=False,
+               size=int(1e5),
+               target_table='pool_of_state_dicts',
+               batch_size=1):
+    torch.utils.data.Dataset.__init__(self)
+    PoolOfStatesFromDatabase.__init__(self, from_db_path=from_db_path,
+                                      load_state_as_type=load_state_as_type,  # or 'dict'
+                                      drop_actions=drop_actions,
+                                      size=size,
+                                      target_table=target_table
+                                      )
+    # self.dataset = []
+    # cursor = self._connection.cursor()
+    # query_string = self._build_query()
+    # # query database with all the information necessary to build the observation_dictionary
+    # cursor.execute(query_string)
+    # # parse query
+    # it = 0
+    # for row in cursor:  # database row
+    #   # build observation_dict from row
+    #   self.dataset.append(self._parse_row_to_dict(row))
+    #   it += 1
+    #   if it % 1000 == 0:
+    #     print(f'loaded {it} rows')
+    #   if it >= size:
+    #     break
+
+  # def __getitem__(self, item):
+  #   return self.dataset[item]
+  #
+  # def __len__(self):
+  #   return len(self.dataset)
 
 
 def eval_fn(net, eval_loader, criterion, target_agent, num_states):
@@ -235,7 +324,9 @@ def train_eval(config,
                eval_interval=1000,
                num_eval_states=100,
                max_train_steps=np.inf,
-               use_ray=True):
+               use_ray=True,
+               dataset=None,
+               pyhanabi_as_bytes=False):
   target_agent_cls = config['agent']
   lr = config['lr']
   num_hidden_layers = config['num_hidden_layers']
@@ -246,12 +337,27 @@ def train_eval(config,
 
   if from_db_path is None:
     raise NotImplementedError("Todo: Implement the database setup before training on new machines. ")
-  trainset = PoolOfStatesFromDatabase(from_db_path=from_db_path,
-                                      target_table=target_table,
-                                      batch_size=batch_size,
-                                      drop_actions=True,
-                                      load_state_as_type='dict')
-  trainloader = DataLoader(trainset, batch_size=None)
+  def _train_loader():
+    # if dataset is None:
+    #   trainset = IterablePoolOfStatesFromDatabase(from_db_path=from_db_path,
+    #                                               target_table=target_table,
+    #                                               batch_size=batch_size,
+    #                                               drop_actions=True,
+    #                                               load_state_as_type='dict')
+    #   trainloader = DataLoader(trainset, batch_size=None)
+    # else:
+    #   # trainset = MapStylePoolOfStatesFromDatabase(from_db_path=from_db_path,
+    #   #                                             target_table=target_table,
+    #   #                                             drop_actions=True,
+    #   #                                             load_state_as_type='dict')
+    #   # trainloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    #   # trainloader = dataset
+    #   return MapStylePoolOfStatesFromDatabase(from_db_path=FROM_DB_PATH, size=int(2e3)).get_eagerly(
+    #     pyhanabi_as_bytes=True, batch_length=batch_size)
+    # return trainloader
+    return MapStylePoolOfStatesFromDatabase(from_db_path=FROM_DB_PATH, size=int(2e3)).get_eagerly(
+           pyhanabi_as_bytes=True, batch_length=batch_size)
+  trainloader = _train_loader()
   testloader = StateActionCollector(AGENT_CLASSES, 3)
 
   net = model.get_model(observation_size=956,  # todo derive this from game_config
@@ -274,16 +380,26 @@ def train_eval(config,
   if not use_ray:
     ckptdir = checkpoint_dir if checkpoint_dir else ''
     writer = SummaryWriter(log_dir=ckptdir + 'manual_train/')
+  def _parse_batch(b):
+    ret = []
+    for obs in b:
+      d = dict(obs)
+      if pyhanabi_as_bytes:
+        d['pyhanabi'] = pickle.loads(obs['pyhanabi'])
+      ret.append(d)
+    return ret
 
   while True:
     try:
-      for batch in trainloader:
+      # for batch_raw in trainloader:
+      for batch_raw in trainloader:
         # observation = batch[0]
         # action = target_agent.act(observation)
         # action = torch.LongTensor([to_int(action)])
         # actions = torch.LongTensor([to_int(target_agent.act(obs)) for obs in batch])
         # vectorized = torch.FloatTensor(observation['vectorized'])
         # vectorized = torch.FloatTensor([obs['vectorized'] for obs in batch])
+        batch = _parse_batch(batch_raw)
         actions = torch.LongTensor([to_int(target_agent.act(obs)) for obs in batch])
         vectorized = torch.FloatTensor([obs['vectorized'] for obs in batch])
         optimizer.zero_grad()
@@ -319,10 +435,12 @@ def train_eval(config,
         it += 1
         if it > max_train_steps:
           return
+      trainloader = _train_loader()
     except Exception as e:
       if isinstance(e, StopIteration):
         # database has been read fully, start over
-        trainloader = DataLoader(trainset, batch_size=None)
+        # trainloader = dataset
+        trainloader = _train_loader()
         epoch += 1
         continue
       else:
@@ -340,8 +458,21 @@ def run_train_eval_with_ray(name, scheduler, search_space, metric, mode, log_int
                      eval_interval=eval_interval,
                      num_eval_states=num_eval_states,
                      max_train_steps=max_train_steps,
-                     use_ray=True
+                     use_ray=True,
                      )
+  # dataset = MapStylePoolOfStatesFromDatabase(from_db_path=FROM_DB_PATH, size=int(5e4)).get_eagerly(
+  #   pyhanabi_as_bytes=True, batch_length=search_space['batch_size'])
+  # dataset = torch.utils.data.TensorDataset(torch.Tensor(data))
+  train_fn = tune.with_parameters(train_eval,
+                                  # dataset=dataset,
+                                  from_db_path=FROM_DB_PATH,
+                                  target_table='pool_of_state_dicts',
+                                  log_interval=log_interval,
+                                  eval_interval=eval_interval,
+                                  num_eval_states=num_eval_states,
+                                  max_train_steps=max_train_steps,
+                                  use_ray=True,
+                                  pyhanabi_as_bytes=True)
 
   analysis = tune.run(train_fn,
                       metric=metric,
@@ -382,7 +513,7 @@ def select_best_model(name,
                             # mode=mode,
                             max_t=max_t)  # current implementation raises stop iteration when db is finished
   # todo if necessary, build the search space from call params
-  search_space = {'agent':  agentcls,  # tune.grid_search(list(AGENT_CLASSES.values())),  #  agentcls,
+  search_space = {'agent': agentcls,  # tune.grid_search(list(AGENT_CLASSES.values())),  #  agentcls,
                   'lr': lr,  # learning rate seems to be best in [2e-3, 4e-3], old [1e-4, 1e-1]
                   'num_hidden_layers': 1,  # tune.grid_search([1, 2]),
                   # 'layer_size': tune.grid_search([64, 96, 128, 196, 256, 376, 448, 512]),
@@ -489,6 +620,7 @@ def main():
   # exit(0)
   for agentname, agentcls in AGENT_CLASSES.items():
     if USE_RAY:
+      # dataset =
       best_model_analysis = select_best_model(name=agentname,
                                               agentcls=agentcls,
                                               metric='acc',
@@ -496,7 +628,7 @@ def main():
                                               grace_period=GRACE_PERIOD,
                                               max_t=MAX_T,
                                               num_samples=NUM_SAMPLES,
-                                              lr=tune.loguniform(1e-2, 4e-3),
+                                              lr=tune.loguniform(1e-4, 5e-3),
                                               layer_size=tune.grid_search([64, 128, 256]),
                                               batch_size=BATCH_SIZE)  # USE DEFAULTS for metric etc
       # todo maybe create two tune.Experiment instances for these
@@ -533,3 +665,7 @@ def main():
 
 if __name__ == '__main__':
   main()
+  # data = MapStylePoolOfStatesFromDatabase(size=1000).get_eagerly(pyhanabi_as_bytes=True)
+  # d = data[0]['pyhanabi']
+  # print(d)
+  # print('hello')
